@@ -22,11 +22,16 @@ Aplicación web (FastAPI + HTML/JS sin dependencias) que implementa la tarjeta
 | `lanzar_demo.slurm` | lanzamiento en lamarr con GPU |
 | `requirements.txt` | dependencias |
 
-Los modelos y los `.jsonl` no están en el repositorio (pesan varios GB): se colocan aparte.
+Los dos modelos están en `modelos/` con **Git LFS** (unos 5,5 GB). Antes de clonar:
+`git lfs install`. El generativo está partido en 4 archivos `model-0000X-of-00004.safetensors`
+(con `model.safetensors.index.json`), porque GitHub no admite archivos LFS de más de 2 GB;
+transformers lo carga igual. El discriminativo es el **v2** (reentrenado sin el atajo del punto).
+
+Los `.jsonl` (`test.jsonl`, `predictions.jsonl`) no están en el repositorio: van en la carpeta de arriba.
 
 ## Con Docker
 
-Estructura esperada (la misma que en `demoEUIPO`):
+Estructura esperada (la misma que en `demoEUIPO`; `modelos/` ya viene en el repositorio):
 
 ```
 demoEUIPO/

@@ -1,8 +1,5 @@
-modelos/
 __pycache__/
 *.jsonl
-*.safetensors
-*.bin
 *.pt
 .env
 .venv/
