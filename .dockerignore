@@ -1,0 +1,7 @@
+modelos/
+__pycache__/
+*.jsonl
+*.safetensors
+*.bin
+.env
+.git

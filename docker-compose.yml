@@ -1,0 +1,19 @@
+# Arranque: copia .env.example a .env, ajusta las rutas y ejecuta `docker compose up --build`.
+services:
+  demo:
+    build: .
+    image: demo-euipo
+    ports:
+      - "${PUERTO:-8000}:8000"
+    volumes:
+      - ${MODELOS:-./modelos}:/srv/app/modelos:ro
+      - ${TEST_JSONL:-../test.jsonl}:/srv/test.jsonl:ro
+      - ${PREDICCIONES_JSONL:-../predictions.jsonl}:/srv/predictions.jsonl:ro
+    # Opciones extra de app.py, p. ej. "--sin-generador" o "--precision bfloat16"
+    command: ${OPCIONES:---precision bfloat16}
+    restart: unless-stopped
+    # Para GPU NVIDIA (con la imagen construida con TORCH_INDEX de CUDA), descomenta:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]

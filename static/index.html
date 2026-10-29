@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demostrador EUIPO</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+<header class="cabecera">
+  <div class="contenedor fila-cab">
+    <div class="marca">
+      <div class="logo" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7l-3 7a4 4 0 0 0 6 0z"/><path d="M19 7l-3 7a4 4 0 0 0 6 0z"/><path d="M8 21h8"/></svg>
+      </div>
+      <div>
+        <div class="titulo">Demostrador EUIPO</div>
+        <div class="subtitulo">Caso de uso 1 · Denegaciones absolutas (art. 7 EUTMR)</div>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="chip" id="chip-disc">Discriminativo · …</span>
+      <span class="chip" id="chip-gen">Generativo · …</span>
+    </div>
+  </div>
+  <nav class="contenedor pestanas" aria-label="Secciones">
+    <button type="button" class="pestana activa" data-tab="una">Analizar una marca</button>
+    <button type="button" class="pestana" data-tab="lote">Evaluación por lotes (.jsonl)</button>
+  </nav>
+</header>
+
+<main class="contenedor principal">
+  <div id="aviso-simulado" class="aviso" hidden>El modelo discriminativo está <strong>simulado</strong> (el servidor se arrancó sin <code>--clasificador</code>). Úsalo solo para probar la interfaz.</div>
+
+  <!-- ============ Una marca ============ -->
+  <div id="tab-una" class="columnas">
+    <section class="tarjeta" aria-labelledby="h-entrada">
+      <div>
+        <h2 id="h-entrada"><span class="paso-num">1</span>Datos de la marca</h2>
+        <p class="ayuda">Elige cómo introducir la marca. Los campos se pueden editar después en cualquier caso.</p>
+      </div>
+
+      <div class="segmentado" role="group" aria-label="Origen de los datos">
+        <button type="button" data-modo="pick" class="activo">Candidatos de test</button>
+        <button type="button" data-modo="txt">Importar .txt</button>
+        <button type="button" data-modo="write">Escribir</button>
+      </div>
+
+      <div id="modo-pick" class="campo">
+        <label for="cand" id="lbl-cand">Marca candidata</label>
+        <select id="cand"><option value="">Selecciona una marca…</option></select>
+        <div id="cand-info" class="nota" hidden></div>
+      </div>
+
+      <div id="modo-txt" class="zona" hidden>
+        <label for="txt">Archivo .txt</label>
+        <input id="txt" type="file" accept=".txt,text/plain">
+        <div class="nota">Formato: primera línea = nombre de la marca; resto = bienes y servicios, una clase por línea con su número delante (p. ej. <span class="mono">9. Computer games</span>).</div>
+        <div id="txt-info" class="nota" hidden></div>
+      </div>
+
+      <div class="campo">
+        <label for="nm">Nombre de la marca</label>
+        <input id="nm" type="text" placeholder="p. ej. SUPPLY CHAIN CERTAINTY" autocomplete="off">
+      </div>
+
+      <div class="campo">
+        <label for="gs">Bienes y servicios (clases de Niza, una por línea)</label>
+        <textarea id="gs" rows="9" placeholder="35. Supply chain management services; ...&#10;39. Transportation services; ..."></textarea>
+      </div>
+
+      <details>
+        <summary>Ver la entrada que recibe el modelo discriminativo (normalizada)</summary>
+        <pre id="entrada" class="pre"></pre>
+      </details>
+
+      <div class="acciones">
+        <button type="button" id="analizar" class="primario" disabled>Analizar</button>
+        <button type="button" id="limpiar" class="secundario">Limpiar</button>
+      </div>
+    </section>
+
+    <section class="tarjeta" aria-labelledby="h-res" aria-live="polite">
+      <h2 id="h-res"><span class="paso-num">2</span>Resultado</h2>
+
+      <div id="res-vacio" class="vacio">Introduce una marca y pulsa <strong>Analizar</strong>. Primero decide el modelo discriminativo; si hay denegación absoluta, el generativo explica el motivo.</div>
+
+      <div id="res-cargando" hidden>
+        <div id="res-paso" class="nota"></div>
+        <div class="barra-carga"><div></div></div>
+      </div>
+
+      <div id="res-error" class="error" hidden></div>
+
+      <div id="res-veredicto" class="veredicto" hidden>
+        <div class="etiqueta-paso">Paso 1 · Modelo discriminativo</div>
+        <div id="ver-texto" class="ver-texto"></div>
+        <div class="nota">Probabilidad de denegación absoluta: <strong id="ver-prob" class="ver-pct"></strong> <span id="ver-umbral"></span></div>
+        <div class="barra-prob"><div id="ver-barra"></div></div>
+        <div id="ver-comparar" class="nota"></div>
+      </div>
+
+      <div id="res-explicacion" class="explicacion" hidden>
+        <div class="etiqueta-paso">Paso 2 · Modelo generativo · Motivo</div>
+        <div id="exp-cargando" class="nota" hidden>Generando la explicación…</div>
+        <div id="exp-cuerpo" hidden>
+          <div class="fila-tipo"><span class="nota">Tipo de denegación</span><span id="exp-tipo" class="pildora-tipo"></span></div>
+          <p id="exp-texto" class="exp-texto"></p>
+          <div id="exp-fuente" class="nota"></div>
+        </div>
+      </div>
+
+      <div id="res-no-gen" class="nota" hidden>Sin denegación absoluta: no se invoca el modelo generativo.</div>
+
+      <div id="res-real" class="pie-res" hidden></div>
+    </section>
+  </div>
+
+  <!-- ============ Lotes ============ -->
+  <div id="tab-lote" class="pila" hidden>
+    <section class="tarjeta fila-lote" aria-labelledby="h-lote">
+      <div class="crece">
+        <h2 id="h-lote">Comparar el modelo con un .jsonl etiquetado</h2>
+        <p class="ayuda">Cada línea debe tener <span class="mono">name</span>, <span class="mono">goods_and_services</span> y <span class="mono">absolute_refusal</span>, como en el dataset de la EUIPO. Se compara la predicción del discriminativo con <span class="mono">absolute_refusal</span>.</p>
+      </div>
+      <div class="acciones">
+        <label class="secundario-azul">Subir .jsonl<input id="jsonl" type="file" accept=".jsonl,.json,application/jsonl" class="oculto"></label>
+        <button type="button" id="ejemplo" class="primario">Usar lote de ejemplo</button>
+      </div>
+
+    </section>
+
+    <div id="lote-vacio" class="vacio tarjeta">Aún no hay ningún lote cargado.</div>
+
+    <section id="lote-progreso" class="tarjeta" hidden>
+      <div id="lote-prog-texto" class="nota"></div>
+      <div class="barra-prob"><div id="lote-prog-barra" style="background: var(--azul)"></div></div>
+    </section>
+
+    <div id="lote-error" class="error" hidden></div>
+
+    <div id="lote-res" class="pila" hidden>
+      <div id="lote-archivo" class="nota"></div>
+      <div class="kpis">
+        <div class="kpi"><div class="nota">Marcas evaluadas</div><div class="kpi-num" id="k-total"></div></div>
+        <div class="kpi"><div class="nota">Aciertos</div><div class="kpi-num azul" id="k-aciertos"></div></div>
+        <div class="kpi"><div class="nota">Fallos</div><div class="kpi-num naranja" id="k-fallos"></div></div>
+        <div class="kpi"><div class="nota">F1 clase «denegación»</div><div class="kpi-num" id="k-f1"></div></div>
+      </div>
+
+      <div class="columnas">
+        <section class="tarjeta ancha" aria-labelledby="h-graf">
+          <div class="fila-esp">
+            <h3 id="h-graf">Aciertos y fallos por clase real</h3>
+            <div class="leyenda"><span><i class="cuadro azul-bg"></i>Acierto</span><span><i class="cuadro naranja-bg"></i>Fallo</span></div>
+          </div>
+          <div id="barras" class="pila"></div>
+        </section>
+        <section class="tarjeta" aria-labelledby="h-mat">
+          <h3 id="h-mat">Matriz de confusión</h3>
+          <table class="matriz">
+            <thead><tr><th class="nota">Real ↓ / Predicho →</th><th>Denegación</th><th>Sin denegación</th></tr></thead>
+            <tbody>
+              <tr><th>Denegación</th><td class="ok" id="m-tp"></td><td class="ko" id="m-fn"></td></tr>
+              <tr><th>Sin denegación</th><td class="ko" id="m-fp"></td><td class="ok" id="m-tn"></td></tr>
+            </tbody>
+          </table>
+          <div id="m-metricas" class="nota"></div>
+        </section>
+      </div>
+
+      <section class="tarjeta" aria-labelledby="h-fallos">
+        <div class="fila-esp">
+          <h3 id="h-fallos">Marcas con fallo</h3>
+          <a id="csv" class="secundario" href="#" download>Descargar resultados (.csv)</a>
+        </div>
+        <div class="tabla-scroll">
+          <table class="tabla">
+            <thead><tr><th>Marca</th><th>Real</th><th>Predicho</th><th>Prob. denegación</th><th>Sin normalizar</th><th>Tipo de error</th></tr></thead>
+            <tbody id="fallos"></tbody>
+          </table>
+        </div>
+        <div id="fallos-nota" class="nota"></div>
+      </section>
+    </div>
+  </div>
+
+  <footer class="nota pie">Datos: partición de test de gplsi/euipo-absolute-refusals.</footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
