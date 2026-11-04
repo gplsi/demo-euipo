@@ -176,6 +176,8 @@ si no se reconoce se asume el índice 1.
 
 ## API
 
-`GET /api/estado`, `GET /api/candidatos`, `POST /api/clasificar` y `POST /api/explicar`
-(`{"name", "goods", "candidato_id"?}`), `POST /api/lote` (multipart `archivo`),
-`POST /api/lote/ejemplo`, `GET /api/lote/{id}`, `GET /api/lote/{id}/csv`.
+`GET /api/estado`, `GET /api/candidatos` (`?aleatorio=1`), `POST /api/clasificar` y `POST /api/explicar`
+(`{"name", "goods", "candidato_id"?, "peticion_id"?}`), `POST /api/detener/{peticion_id}`
+(corta la generación en curso), `POST /api/lote` (multipart `archivo`), `POST /api/lote/ejemplo`,
+`GET /api/lote/{id}`, `POST /api/lote/{id}/detener` (para y deja los resultados de lo ya clasificado),
+`GET /api/lote/{id}/csv`.

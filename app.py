@@ -5,9 +5,11 @@ Backend FastAPI que sirve el frontend de static/ y expone:
   GET  /api/candidatos           10 marcas de test (semilla fija; ?aleatorio=1: otras 10 del grupo de 100)
   POST /api/clasificar           modelo discriminativo: ¿denegación absoluta?
   POST /api/explicar             modelo generativo: tipo y explicación
+  POST /api/detener/{id}         detiene la explicación en curso con ese peticion_id
   POST /api/lote                 sube un .jsonl y lo evalúa contra absolute_refusal
   POST /api/lote/ejemplo         lote de ejemplo muestreado de test.jsonl
   GET  /api/lote/{id}            progreso y resultados
+  POST /api/lote/{id}/detener    detiene el lote; quedan los resultados de lo ya clasificado
   GET  /api/lote/{id}/csv        predicciones de todo el lote
 
 Uso (ver README.md):
@@ -225,13 +227,27 @@ class Generador:
             msgs = [{"role": "user", "content": SYSTEM_PROMPT + "\n\n" + usuario}]
             return self.tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
 
-    def generar(self, usuario):
+    def generar(self, usuario, detener=None):
+        """detener: threading.Event opcional; si se activa, la generación para en el siguiente token."""
+        from transformers import StoppingCriteria, StoppingCriteriaList
+        torch = self.torch
+
+        class Detener(StoppingCriteria):
+            def __call__(self, input_ids, scores, **kwargs):
+                return torch.full((input_ids.shape[0],), detener.is_set(), dtype=torch.bool,
+                                  device=input_ids.device)
+
         texto = self._plantilla(usuario)
         enc = self.tok(texto, return_tensors="pt", add_special_tokens=False).to(self.dev)
         pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else self.tok.eos_token_id
+        extra = {"stopping_criteria": StoppingCriteriaList([Detener()])} if detener else {}
         with self.lock, self.torch.inference_mode():
+            if detener and detener.is_set():  # se detuvo mientras esperaba su turno
+                return None
             out = self.model.generate(**enc, max_new_tokens=self.max_new_tokens,
-                                      do_sample=False, pad_token_id=pad)
+                                      do_sample=False, pad_token_id=pad, **extra)
+        if detener and detener.is_set():
+            return None
         return self.tok.decode(out[0, enc["input_ids"].shape[1]:], skip_special_tokens=True).strip()
 
 
@@ -301,6 +317,7 @@ class Peticion(BaseModel):
     name: str
     goods: str = ""
     candidato_id: str | None = None
+    peticion_id: str | None = None  # para poder detener la explicación con /api/detener/{id}
 
 
 def crear_app(args):
@@ -389,6 +406,13 @@ def crear_app(args):
         return {"entrada": entrada, "probabilidad": prob, "denegacion": prob >= args.umbral,
                 "umbral": args.umbral, "modo": clasificador.modo}
 
+    detenciones = {}  # peticion_id -> threading.Event
+
+    @app.post("/api/detener/{pid}")
+    def detener(pid: str):
+        detenciones.setdefault(pid, threading.Event()).set()
+        return {"detenido": pid}
+
     @app.post("/api/explicar")
     def explicar(p: Peticion):
         if not p.name.strip():
@@ -398,7 +422,13 @@ def crear_app(args):
         if prompt in precalculadas and (args.usar_precalculadas or not generador):
             crudo, fuente = precalculadas[prompt], "precalculada"
         elif generador:
-            crudo, fuente = generador.generar(prompt), "modelo"
+            ev = detenciones.setdefault(p.peticion_id, threading.Event()) if p.peticion_id else None
+            try:
+                crudo, fuente = generador.generar(prompt, ev), "modelo"
+            finally:
+                detenciones.pop(p.peticion_id, None)
+            if crudo is None:
+                raise HTTPException(409, "Explicación detenida")
         else:
             raise HTTPException(503, "No hay modelo generativo cargado y esta marca no está en "
                                      "predictions.jsonl. Arranca con --generador.")
@@ -423,6 +453,8 @@ def crear_app(args):
                 buf.clear()
 
             for r in filas_iter:
+                if t.get("detener"):
+                    break
                 if "absolute_refusal" not in r or not r.get("name"):
                     t["descartadas"] += 1
                     continue
@@ -434,7 +466,7 @@ def crear_app(args):
                 buf.append((fila, entrada_discriminativo(fila["name"], gs)))
                 if len(buf) >= args.lote:
                     vaciar()
-            if buf:
+            if buf and not t.get("detener"):
                 vaciar()
             tp = sum(f["real"] and f["pred"] for f in filas)
             fn = sum(f["real"] and not f["pred"] for f in filas)
@@ -445,7 +477,7 @@ def crear_app(args):
             fallos = sorted((f for f in filas if f["real"] != f["pred"]),
                             key=lambda f: abs(f["prob"] - args.umbral))
             t.update({
-                "estado": "hecho", "filas": filas,
+                "estado": "hecho", "filas": filas, "detenido": bool(t.get("detener")),
                 "resultado": {
                     "total": len(filas), "aciertos": tp + tn, "fallos": fp + fn,
                     "tp": tp, "fn": fn, "fp": fp, "tn": tn,
@@ -499,6 +531,14 @@ def crear_app(args):
         else:
             filas = datos.lote_ejemplo(args.ejemplo_n, args.ejemplo_pos, args.semilla)
         return lanzar(f"ejemplo de {datos.ruta.name} ({len(filas)} marcas)", iter(filas), len(filas))
+
+    @app.post("/api/lote/{tid}/detener")
+    def detener_lote(tid: str):
+        t = trabajos.get(tid)
+        if not t:
+            raise HTTPException(404, "Lote no encontrado")
+        t["detener"] = True
+        return {"detenido": tid}
 
     @app.get("/api/lote/{tid}")
     def ver_lote(tid: str):

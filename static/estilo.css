@@ -101,6 +101,11 @@ summary { cursor: pointer; font-weight: 600; }
 .secundario-azul { border: 1px solid var(--azul-borde); background: var(--azul-claro); color: var(--azul); position: relative; }
 .secundario-azul:hover { border-color: var(--azul); }
 .oculto { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+.peligro { font: inherit; font-weight: 600; min-height: 46px; padding: 0 20px; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; border: 1px solid #F2B8B5; background: #FDECEC; color: #8C1D18; }
+.peligro::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: currentColor; }
+.peligro:hover { border-color: #8C1D18; }
+.peligro:disabled { opacity: .6; cursor: wait; }
+.aviso-suave { padding: 12px 16px; border-radius: 12px; background: var(--gris); border: 1px solid var(--borde); color: var(--tinta2); font-size: 14px; }
 
 /* ---------- Estados ---------- */
 .vacio { padding: 40px 24px; border: 1.5px dashed var(--borde); border-radius: 12px; text-align: center; color: var(--suave); font-size: 14px; background: var(--superficie-2); }

@@ -18,9 +18,10 @@ async function api(ruta, opciones) {
   }
   return r.json();
 }
-const postJSON = (ruta, cuerpo) => api(ruta, {
-  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo),
+const postJSON = (ruta, cuerpo, signal) => api(ruta, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo), signal,
 });
+const esDetenido = (err) => err.name === 'AbortError';
 
 // ---------------- estado del servidor ----------------
 async function cargarEstado() {
@@ -129,7 +130,7 @@ $('limpiar').addEventListener('click', () => {
 // ---------------- análisis de una marca ----------------
 function reiniciarResultado() {
   $('res-vacio').hidden = false;
-  for (const id of ['res-cargando', 'res-error', 'res-veredicto', 'res-explicacion', 'res-no-gen', 'res-real']) $(id).hidden = true;
+  for (const id of ['res-cargando', 'res-error', 'res-detenido', 'res-veredicto', 'res-explicacion', 'res-no-gen', 'res-real']) $(id).hidden = true;
 }
 
 function mostrarError(id, err) {
@@ -137,10 +138,23 @@ function mostrarError(id, err) {
   $(id).textContent = 'Error: ' + err.message;
 }
 
+let analisis = null;  // { ctrl, pid } del análisis en curso, para poder detenerlo
+
+$('detener').addEventListener('click', () => {
+  if (!analisis) return;
+  $('detener').disabled = true;
+  analisis.ctrl.abort();
+  // El servidor también corta la generación del modelo generativo
+  fetch('/api/detener/' + analisis.pid, { method: 'POST' }).catch(() => {});
+});
+
 $('analizar').addEventListener('click', async () => {
+  const pid = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  analisis = { ctrl: new AbortController(), pid };
+  const signal = analisis.ctrl.signal;
   const cuerpo = {
     name: $('nm').value.trim(), goods: $('gs').value,
-    candidato_id: candidatoActual ? candidatoActual.id : null,
+    candidato_id: candidatoActual ? candidatoActual.id : null, peticion_id: pid,
   };
   const real = candidatoActual ? candidatoActual.absolute_refusal : null;
   reiniciarResultado();
@@ -149,8 +163,10 @@ $('analizar').addEventListener('click', async () => {
   $('res-paso').textContent = 'Clasificando con el modelo discriminativo…';
   $('analizar').disabled = true;
   $('analizar').textContent = 'Analizando…';
+  $('detener').hidden = false;
+  $('detener').disabled = false;
   try {
-    const c = await postJSON('/api/clasificar', cuerpo);
+    const c = await postJSON('/api/clasificar', cuerpo, signal);
     $('res-cargando').hidden = true;
     $('entrada').textContent = c.entrada;
     const v = $('res-veredicto');
@@ -175,7 +191,7 @@ $('analizar').addEventListener('click', async () => {
     $('exp-cargando').hidden = false;
     $('exp-cuerpo').hidden = true;
     try {
-      const e = await postJSON('/api/explicar', cuerpo);
+      const e = await postJSON('/api/explicar', cuerpo, signal);
       $('exp-cargando').hidden = true;
       $('exp-cuerpo').hidden = false;
       $('exp-tipo').textContent = e.tipo ? e.tipo.charAt(0).toUpperCase() + e.tipo.slice(1) : '—';
@@ -185,12 +201,25 @@ $('analizar').addEventListener('click', async () => {
         : 'Generada por el modelo en ' + num(e.segundos, 1) + ' s.';
     } catch (err) {
       $('exp-cargando').hidden = true;
-      mostrarError('res-error', err);
+      if (esDetenido(err)) {
+        $('res-explicacion').hidden = true;
+        $('res-detenido').hidden = false;
+        $('res-detenido').textContent = 'Explicación detenida: el modelo generativo no ha terminado.';
+      } else {
+        mostrarError('res-error', err);
+      }
     }
   } catch (err) {
     $('res-cargando').hidden = true;
-    mostrarError('res-error', err);
+    if (esDetenido(err)) {
+      $('res-detenido').hidden = false;
+      $('res-detenido').textContent = 'Análisis detenido.';
+    } else {
+      mostrarError('res-error', err);
+    }
   } finally {
+    analisis = null;
+    $('detener').hidden = true;
     $('analizar').textContent = 'Analizar';
     $('analizar').disabled = !$('nm').value.trim();
   }
@@ -198,6 +227,14 @@ $('analizar').addEventListener('click', async () => {
 
 // ---------------- lotes ----------------
 let sondeo = null;
+let loteActual = null;
+
+$('detener-lote').addEventListener('click', async () => {
+  if (!loteActual) return;
+  $('detener-lote').disabled = true;
+  $('lote-prog-texto').textContent = 'Deteniendo…';
+  try { await api('/api/lote/' + loteActual + '/detener', { method: 'POST' }); } catch (e) { /* ya había terminado */ }
+});
 
 async function iniciarLote(promesa) {
   clearTimeout(sondeo);
@@ -207,8 +244,12 @@ async function iniciarLote(promesa) {
   $('lote-progreso').hidden = false;
   $('lote-prog-texto').textContent = 'Subiendo…';
   $('lote-prog-barra').style.width = '0%';
+  $('detener-lote').hidden = true;
   try {
     const { id } = await promesa;
+    loteActual = id;
+    $('detener-lote').hidden = false;
+    $('detener-lote').disabled = false;
     seguirLote(id);
   } catch (err) {
     $('lote-progreso').hidden = true;
@@ -221,12 +262,13 @@ async function seguirLote(id) {
     const t = await api('/api/lote/' + id);
     if (t.estado === 'en curso') {
       const p = t.total ? t.hechas / t.total : 0;
-      $('lote-prog-texto').textContent = 'Clasificando ' + t.archivo + ': ' + t.hechas + ' de ' + t.total + ' marcas…';
+      if (!t.detener) $('lote-prog-texto').textContent = 'Clasificando ' + t.archivo + ': ' + t.hechas + ' de ' + t.total + ' marcas…';
       $('lote-prog-barra').style.width = Math.round(p * 100) + '%';
       sondeo = setTimeout(() => seguirLote(id), 700);
       return;
     }
     $('lote-progreso').hidden = true;
+    loteActual = null;
     if (t.estado === 'error') throw new Error(t.error);
     pintarLote(id, t);
   } catch (err) {
@@ -255,7 +297,8 @@ function pintarLote(id, t) {
   const r = t.resultado;
   $('lote-res').hidden = false;
   $('lote-archivo').innerHTML = 'Archivo: <strong class="mono"></strong> · ' + r.total + ' marcas (' + (r.tp + r.fn) + ' con denegación absoluta)'
-    + (t.descartadas ? ' · ' + t.descartadas + ' líneas descartadas por formato' : '');
+    + (t.descartadas ? ' · ' + t.descartadas + ' líneas descartadas por formato' : '')
+    + (t.detenido ? ' · <strong>detenido</strong>: resultados de las ' + r.total + ' marcas clasificadas de ' + t.total : '');
   $('lote-archivo').querySelector('strong').textContent = t.archivo;
   $('k-total').textContent = r.total;
   $('k-aciertos').innerHTML = r.aciertos + ' <small>' + pct(r.accuracy) + '</small>';
