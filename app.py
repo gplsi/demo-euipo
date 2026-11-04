@@ -1,8 +1,8 @@
-"""Demostrador EUIPO — Caso de uso 1 (denegaciones absolutas, art. 7 EUTMR).
+"""Demostrador EUIPO — Denegaciones absolutas (art. 7 EUTMR).
 
 Backend FastAPI que sirve el frontend de static/ y expone:
   GET  /api/estado               modelos cargados y modo de cada uno
-  GET  /api/candidatos           10 marcas de la partición de test (semilla fija)
+  GET  /api/candidatos           10 marcas de test (semilla fija; ?aleatorio=1: otras 10 del grupo de 100)
   POST /api/clasificar           modelo discriminativo: ¿denegación absoluta?
   POST /api/explicar             modelo generativo: tipo y explicación
   POST /api/lote                 sube un .jsonl y lo evalúa contra absolute_refusal
@@ -110,16 +110,6 @@ def entrada_discriminativo(name, gs):
         if terms:
             partes.append(f"{g.get('classNumber', '')}. {terms}")
     return f"{name}: " + " ".join(partes)
-
-
-def normalizar_gs(gs):
-    """Quita el punto final de los términos de cada clase.
-
-    El discriminativo actual usa ese punto como atajo (las denegadas del dataset suelen
-    terminar en «.» y las aceptadas no), así que sin normalizar una marca escrita a mano
-    con punto final sale casi siempre como denegación. Ver prueba_formato.py.
-    """
-    return [{**g, "terms": str(g.get("terms", "")).strip().rstrip(".").rstrip()} for g in gs]
 
 
 def prompt_generativo(name, gs):
@@ -315,14 +305,18 @@ class Peticion(BaseModel):
 
 def crear_app(args):
     datos = DatosTest(args.test)
-    candidatos = []
-    for r in datos.muestra(args.n_candidatos, args.semilla, args.muestreo):
+    def a_candidato(r):
         gs = r.get("goods_and_services") or []
-        candidatos.append({
-            "id": str(r.get("id", "")), "name": r.get("name", ""), "goods": gs_a_texto(gs),
-            "goods_and_services": gs, "absolute_refusal": a_bool(r.get("absolute_refusal")),
-        })
-    por_id = {c["id"]: c for c in candidatos}
+        return {"id": str(r.get("id", "")), "name": r.get("name", ""), "goods": gs_a_texto(gs),
+                "goods_and_services": gs, "absolute_refusal": a_bool(r.get("absolute_refusal"))}
+
+    # Los 10 de siempre (semilla fija) y un grupo de hasta 100 del que sale el botón «aleatorio»
+    candidatos = [a_candidato(r) for r in datos.muestra(args.n_candidatos, args.semilla, args.muestreo)]
+    grupo = {c["id"]: c for c in candidatos}
+    for r in datos.muestra(max(0, args.grupo_candidatos - len(candidatos)), args.semilla + 1, args.muestreo):
+        c = a_candidato(r)
+        grupo.setdefault(c["id"], c)
+    por_id = grupo
     # Lote de ejemplo fijo (ejemplos.json): ids de test.jsonl elegidos a mano; si no, se muestrea
     lote_fijo = []
     if args.ejemplos and datos.ruta:
@@ -371,21 +365,29 @@ def crear_app(args):
         }
 
     @app.get("/api/candidatos")
-    def get_candidatos():
-        return [{k: c[k] for k in ("id", "name", "goods", "absolute_refusal")} for c in candidatos]
+    def get_candidatos(aleatorio: bool = False):
+        elegidos = candidatos
+        if aleatorio:
+            todos = list(grupo.values())
+            den = [c for c in todos if c["absolute_refusal"]]
+            acep = [c for c in todos if not c["absolute_refusal"]]
+            n_den = min(len(den), args.n_candidatos // 2) if args.muestreo == "estratificado" else 0
+            if n_den:
+                elegidos = random.sample(den, n_den) + random.sample(acep, min(len(acep), args.n_candidatos - n_den))
+                random.shuffle(elegidos)
+            else:
+                elegidos = random.sample(todos, min(len(todos), args.n_candidatos))
+        return [{k: c[k] for k in ("id", "name", "goods", "absolute_refusal")} for c in elegidos]
 
     @app.post("/api/clasificar")
     def clasificar(p: Peticion):
         if not p.name.strip():
             raise HTTPException(400, "Falta el nombre de la marca")
         gs = resolver_gs(p)
-        tal_cual = entrada_discriminativo(p.name.strip(), gs)
-        normalizada = entrada_discriminativo(p.name.strip(), normalizar_gs(gs))
-        p_tal_cual, p_norm = clasificador.predecir([tal_cual, normalizada])
-        # La decisión se toma siempre sobre la entrada normalizada; la otra se muestra como referencia
-        return {"entrada": normalizada, "entrada_sin_normalizar": tal_cual,
-                "probabilidad": p_norm, "probabilidad_sin_normalizar": p_tal_cual,
-                "denegacion": p_norm >= args.umbral, "umbral": args.umbral, "modo": clasificador.modo}
+        entrada = entrada_discriminativo(p.name.strip(), gs)
+        prob = clasificador.predecir([entrada])[0]
+        return {"entrada": entrada, "probabilidad": prob, "denegacion": prob >= args.umbral,
+                "umbral": args.umbral, "modo": clasificador.modo}
 
     @app.post("/api/explicar")
     def explicar(p: Peticion):
@@ -412,12 +414,9 @@ def crear_app(args):
             buf, filas = [], []
 
             def vaciar():
-                # cada marca va dos veces: normalizada (decide) y tal cual (referencia)
-                probs = clasificador.predecir([x for b in buf for x in b[1]], args.lote)
-                for i, (fila, _) in enumerate(buf):
-                    p = probs[2 * i]
+                probs = clasificador.predecir([b[1] for b in buf], args.lote)
+                for (fila, _), p in zip(buf, probs):
                     fila["prob"] = p
-                    fila["prob_sin_normalizar"] = probs[2 * i + 1]
                     fila["pred"] = p >= args.umbral
                     filas.append(fila)
                 t["hechas"] = len(filas)
@@ -432,8 +431,7 @@ def crear_app(args):
                     gs = texto_a_gs(gs)
                 fila = {"id": str(r.get("id") or ""), "name": str(r["name"]),
                         "real": a_bool(r["absolute_refusal"])}
-                buf.append((fila, (entrada_discriminativo(fila["name"], normalizar_gs(gs)),
-                                   entrada_discriminativo(fila["name"], gs))))
+                buf.append((fila, entrada_discriminativo(fila["name"], gs)))
                 if len(buf) >= args.lote:
                     vaciar()
             if buf:
@@ -516,11 +514,9 @@ def crear_app(args):
             raise HTTPException(404, "Lote no terminado")
         out = io.StringIO()
         w = csv.writer(out)
-        w.writerow(["id", "name", "absolute_refusal", "prediccion", "probabilidad_normalizada",
-                    "probabilidad_sin_normalizar", "acierto"])
+        w.writerow(["id", "name", "absolute_refusal", "prediccion", "probabilidad", "acierto"])
         for f in t["filas"]:
-            w.writerow([f["id"], f["name"], f["real"], f["pred"], f"{f['prob']:.4f}",
-                        f"{f['prob_sin_normalizar']:.4f}", f["real"] == f["pred"]])
+            w.writerow([f["id"], f["name"], f["real"], f["pred"], f"{f['prob']:.4f}", f["real"] == f["pred"]])
         return StreamingResponse(iter([out.getvalue()]), media_type="text/csv",
                                  headers={"Content-Disposition": "attachment; filename=resultados_lote.csv"})
 
@@ -548,6 +544,8 @@ def main():
     ap.add_argument("--lote", type=int, default=32, help="tamaño de lote del discriminativo")
     ap.add_argument("--semilla", type=int, default=42)
     ap.add_argument("--n-candidatos", type=int, default=10)
+    ap.add_argument("--grupo-candidatos", type=int, default=100,
+                    help="marcas de test entre las que elige el botón aleatorio")
     ap.add_argument("--muestreo", choices=["estratificado", "aleatorio"], default="estratificado")
     ap.add_argument("--ejemplo-n", type=int, default=200)
     ap.add_argument("--ejemplo-pos", type=int, default=30)

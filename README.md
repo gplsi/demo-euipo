@@ -4,7 +4,8 @@ Aplicación web (FastAPI + HTML/JS sin dependencias) que implementa la tarjeta
 «Implementar demostrador EUIPO (Caso de Uso 1)» con el diseño del mockup:
 
 1. **Analizar una marca**: nombre + bienes y servicios desde (a) texto, (b) un `.txt`
-   o (c) un desplegable con 10 marcas de la partición de test (semilla fija).
+   o (c) un desplegable con 10 marcas de test (semilla fija) y un botón que trae otras 10 al azar
+   de un grupo de 100.
 2. El **modelo discriminativo** dice si hay denegación absoluta y con qué probabilidad.
 3. Si la hay, el **modelo generativo** (Aitana 2B instruido) da el tipo y la explicación.
 4. **Evaluación por lotes**: sube un `.jsonl` con `name`, `goods_and_services` y
@@ -26,8 +27,8 @@ Los dos modelos están en `modelos/` con **Git LFS** (unos 5,5 GB). Antes de clo
 `git lfs install`. El generativo está partido en 4 archivos `model-0000X-of-00004.safetensors`
 (con `model.safetensors.index.json`), porque GitHub no admite archivos LFS de más de 2 GB;
 transformers lo carga igual. El discriminativo es el **v1**, el publicado en Hugging Face
-(`gplsi/Aitana-euipo-absolute-refusals-1.0`, checkpoint-17212). La demo normaliza la entrada
-(quita el punto final de cada clase) para esquivar su sesgo del punto; ver más abajo.
+(`gplsi/Aitana-euipo-absolute-refusals-1.0`, checkpoint-17212). La demo le pasa la entrada
+tal cual, con el mismo formato con el que se entrenó.
 
 Los `.jsonl` (`test.jsonl`, `predictions.jsonl`) no están en el repositorio: van en la carpeta de arriba.
 
@@ -80,15 +81,14 @@ como atajo (`prueba_formato.py`, 150 + 150 marcas de test):
 | denegadas → % predicho denegación | 94 % | 53 % | 98 % |
 | aceptadas → % predicho denegación | 0 % | 0 % | 87 % |
 
-Por eso la app **normaliza siempre** la entrada (quita el punto final de los términos de cada
-clase, como en el crawl del registro) y decide con esa probabilidad; la probabilidad sin
-normalizar se muestra al lado como referencia, también en la tabla y el CSV de lotes.
-Si la probabilidad normalizada es ≥ 50 % (`--umbral`) se llama al generativo; si no, no.
+La app usa la entrada **tal cual, sin normalizar**, igual que en el entrenamiento: así acierta
+las marcas del dataset, pero una marca escrita a mano con punto final tras los términos tenderá
+a salir como denegación. Si la probabilidad es ≥ 50 % (`--umbral`) se llama al generativo.
 
 Hay un segundo atajo, el **idioma**: el 36,5 % de las denegadas tienen los bienes y servicios
 en otro idioma (letras acentuadas, alemán, español...) frente al 2,7 % de las aceptadas, porque
 las aceptadas vienen casi siempre en inglés. Una marca aceptada escrita en español sale como
-denegación (p. ej. SAMUEL SMITH: inglés 0,000; español 1,000; español normalizado 0,554).
+denegación (p. ej. SAMUEL SMITH: inglés 0,000; español 1,000).
 En la demo conviene escribir los bienes y servicios en inglés; para el reentrenamiento hay que
 equilibrar idiomas o usar siempre la versión inglesa.
 
@@ -166,7 +166,7 @@ web lo avisa con una franja naranja). Sin `--generador` las explicaciones salen 
 | `--usar-precalculadas` | no | con generador cargado, usar igualmente `predictions.jsonl` si la marca está (más rápido) |
 | `--tokenizador` | el del checkpoint | si el checkpoint no guarda el tokenizador, la ruta del modelo base |
 | `--muestreo` | `estratificado` | `estratificado` = 5 denegadas + 5 no; `aleatorio` = muestreo simple (con semilla 42 sale 0 denegadas, porque solo el 1,4 % lo son) |
-| `--semilla`, `--n-candidatos` | 42, 10 | desplegable |
+| `--semilla`, `--n-candidatos`, `--grupo-candidatos` | 42, 10, 100 | desplegable y botón aleatorio (elige 10 de un grupo de 100) |
 | `--ejemplo-n`, `--ejemplo-pos` | 200, 30 | lote de ejemplo del botón «Usar lote de ejemplo» |
 | `--lote` | 32 | tamaño de lote del discriminativo en la evaluación |
 | `--dispositivo` | auto | `cuda`, `cuda:1`, `cpu`… |

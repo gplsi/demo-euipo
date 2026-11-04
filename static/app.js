@@ -31,24 +31,37 @@ async function cargarEstado() {
   const gen = e.generador.nombre ? e.generador.nombre + ' (' + e.generador.modo + ')' : e.generador.modo;
   $('chip-gen').textContent = 'Generativo · ' + gen;
   $('chip-gen').classList.toggle('simulado', e.generador.modo === 'no disponible');
-  $('lbl-cand').textContent = 'Marca candidata (partición de test, muestreo ' + e.muestreo + ', semilla ' + e.semilla + ')';
+  $('lbl-cand').textContent = 'Marca candidata (partición de test; el botón trae otras 10 al azar)';
   $('ejemplo').hidden = !e.lote_ejemplo;
 }
 
-async function cargarCandidatos() {
-  candidatos = await api('/api/candidatos');
+async function cargarCandidatos(aleatorio = false) {
+  candidatos = await api('/api/candidatos' + (aleatorio ? '?aleatorio=1' : ''));
   const sel = $('cand');
+  sel.length = 1;  // deja solo «Selecciona una marca…»
   for (const c of candidatos) {
     const o = document.createElement('option');
     o.value = c.id;
     o.textContent = c.name;
     sel.appendChild(o);
   }
+  $('otras').hidden = !candidatos.length;
   if (!candidatos.length) {
     $('cand-info').hidden = false;
     $('cand-info').textContent = 'No hay candidatos: arranca el servidor con --test test.jsonl.';
   }
 }
+
+$('otras').addEventListener('click', async () => {
+  $('otras').disabled = true;
+  try {
+    await cargarCandidatos(true);
+    $('cand').value = '';
+    $('cand').dispatchEvent(new Event('change'));
+  } finally {
+    $('otras').disabled = false;
+  }
+});
 
 // ---------------- pestañas y modos ----------------
 document.querySelectorAll('.pestana').forEach((b) => b.addEventListener('click', () => {
@@ -148,8 +161,6 @@ $('analizar').addEventListener('click', async () => {
     $('ver-umbral').textContent = '(se considera denegación a partir del ' + pct(c.umbral).replace(',0', '')
       + (c.modo === 'simulado' ? ', SIMULADO' : '') + ')';
     $('ver-barra').style.width = Math.round(c.probabilidad * 100) + '%';
-    $('ver-comparar').textContent = 'Normalizada: ' + prob(c.probabilidad) + ' · Sin normalizar: ' + prob(c.probabilidad_sin_normalizar)
-      + '. La decisión usa la normalizada (sin punto final en cada clase).';
     if (real !== null) {
       $('res-real').hidden = false;
       $('res-real').innerHTML = '<span>Etiqueta real: <strong></strong></span><span></span>';
@@ -264,13 +275,13 @@ function pintarLote(id, t) {
   tb.innerHTML = '';
   for (const f of r.fallos_lista) {
     const tr = document.createElement('tr');
-    const celdas = [f.name, etiqueta(f.real), etiqueta(f.pred), prob(f.prob), prob(f.prob_sin_normalizar),
+    const celdas = [f.name, etiqueta(f.real), etiqueta(f.pred), prob(f.prob),
       f.real ? 'Falso negativo' : 'Falso positivo'];
     celdas.forEach((txt, i) => {
       const td = document.createElement('td');
       td.textContent = txt;
-      if (i === 3 || i === 4) td.className = 'mono';
-      if (i === 5) td.className = 'err';
+      if (i === 3) td.className = 'mono';
+      if (i === 4) td.className = 'err';
       tr.appendChild(td);
     });
     tb.appendChild(tr);
