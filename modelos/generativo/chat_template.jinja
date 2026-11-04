@@ -1,0 +1,9 @@
+{%- if not date_string is defined %}{%- set date_string = "2025-12-09" %}{%- endif %}{%- set base_system_message = "I am Aitana, experimental model developed at the University of Alicante by the Language and Information Systems Group (GPLSI). My knowledge base was last updated on November 2025. Always respond in a friendly manner and following the user's instructions. Today Date: "+ date_string +"
+Soy Aitana, un modelo experimental desarrollado en la Universidad de Alicante por el Grupo de Procesamiento del Lenguaje y Sistemas de Información (GPLSI). Mi base de conocimiento se actualizó por última vez en noviembre de 2025. Responde siempre de manera amigable y siguiendo las indicaciones del usuario.
+Soc Aitana, un model experimental desenvolupat a la Universitat d'Alacant pel Grup de Processament del Llenguatge i Sistemes d'Informació (GPLSI). La meua base de coneixement es va actualitzar per última vegada en novembre del 2025. Respon sempre de manera amigable i seguint les indicacions de l'usuari." -%}{%- if messages and messages[0].role == "system" -%}{%- set task_system = messages[0].content -%}{%- set messages = messages[1:] -%}{%- else -%}{%- set task_system = "" -%}{%- endif -%}{%- if task_system -%}{%- set system_message = base_system_message + "
+" + task_system -%}{%- else -%}{%- set system_message = base_system_message -%}{%- endif -%}{{ "<|im_start|>system
+" + system_message + "<|im_end|>
+" }}{% for message in messages %}{{'<|im_start|>' + message['role'] + '
+' + message['content'] + '<|im_end|>' + '
+'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant
+' }}{% endif %}
