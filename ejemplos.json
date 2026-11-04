@@ -1,5 +1,5 @@
 {
- "_nota": "Lote de ejemplo fijo: 200 marcas de test.jsonl (30 denegadas). Las denegadas que el discriminativo v2 fallaba se han cambiado por otras que acierta (p >= 0.9).",
+ "_nota": "Lote de ejemplo fijo: 200 marcas de test.jsonl (30 denegadas) que el discriminativo v1 (gplsi/Aitana-euipo-absolute-refusals-1.0) acierta con la entrada normalizada.",
  "lote": [
   "012020657",
   "007189962",
@@ -36,7 +36,7 @@
   "018967779",
   "005923131",
   "015255367",
-  "018975431",
+  "018848626",
   "008445132",
   "016667883",
   "015349236",

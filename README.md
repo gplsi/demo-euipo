@@ -17,7 +17,7 @@ Aplicación web (FastAPI + HTML/JS sin dependencias) que implementa la tarjeta
 |---|---|
 | `app.py` | servidor, carga de modelos y API |
 | `static/` | frontend (`index.html`, `estilo.css`, `app.js`) |
-| `ejemplos.json` | ids fijos del lote de ejemplo (200 marcas de test, 30 denegadas) |
+| `ejemplos.json` | ids fijos del lote de ejemplo (200 marcas de test, 30 denegadas; el v1 las acierta todas) |
 | `Dockerfile`, `docker-compose.yml`, `.env.example` | ejecución con Docker |
 | `lanzar_demo.slurm` | lanzamiento en lamarr con GPU |
 | `requirements.txt` | dependencias |
@@ -25,7 +25,9 @@ Aplicación web (FastAPI + HTML/JS sin dependencias) que implementa la tarjeta
 Los dos modelos están en `modelos/` con **Git LFS** (unos 5,5 GB). Antes de clonar:
 `git lfs install`. El generativo está partido en 4 archivos `model-0000X-of-00004.safetensors`
 (con `model.safetensors.index.json`), porque GitHub no admite archivos LFS de más de 2 GB;
-transformers lo carga igual. El discriminativo es el **v2** (reentrenado sin el atajo del punto).
+transformers lo carga igual. El discriminativo es el **v1**, el publicado en Hugging Face
+(`gplsi/Aitana-euipo-absolute-refusals-1.0`, checkpoint-17212). La demo normaliza la entrada
+(quita el punto final de cada clase) para esquivar su sesgo del punto; ver más abajo.
 
 Los `.jsonl` (`test.jsonl`, `predictions.jsonl`) no están en el repositorio: van en la carpeta de arriba.
 

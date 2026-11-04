@@ -36,7 +36,7 @@ from pydantic import BaseModel
 AQUI = Path(__file__).resolve().parent
 # Nombres a mostrar cuando los modelos están copiados en app/modelos/
 NOMBRES_LOCALES = {
-    "discriminativo": "euipo_refusals_v2 (sin atajo del punto)",
+    "discriminativo": "Aitana-euipo-absolute-refusals-1.0 (v1)",
     "generativo": "EUIPO_Aitana_2B_S_Instruct_absolute_refusals_v1",
 }
 
