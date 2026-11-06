@@ -50,7 +50,7 @@ demoEUIPO/
 ```bash
 cd app
 cp .env.example .env          # pon LITELLM_API_KEY (o déjala vacía y escríbela en la web)
-docker compose up --build     # http://localhost:8000
+docker compose up --build     # http://localhost:4545 (puerto externo; dentro del contenedor es el 8000)
 ```
 
 - La imagen es ligera (sin PyTorch ni modelos).

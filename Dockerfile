@@ -1,5 +1,5 @@
 # Demostrador EUIPO (caso de uso 1). Los modelos se consumen por API (LiteLLM); los .jsonl se montan como volúmenes.
-#   docker compose up --build          -> http://localhost:8000
+#   docker compose up --build          -> http://localhost:4545 (externo; interno 8000)
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
