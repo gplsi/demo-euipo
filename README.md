@@ -64,10 +64,10 @@ Datos que usa (de la carpeta `demoEUIPO`):
 ## Despliegue automático (GitHub Actions + GHCR + Watchtower)
 
 Cada push a `main` ejecuta `.github/workflows/docker.yml`, que construye la imagen y la publica en
-`ghcr.io/leurzz/demo-euipo` (tags `latest` y `sha-<commit>`). Watchtower, en el servidor, comprueba
+`ghcr.io/gplsi/demo-euipo` (tags `latest` y `sha-<commit>`). Watchtower, en el servidor, comprueba
 el registro cada 5 minutos y recrea el contenedor `demo` si hay una imagen nueva.
 
-**Una vez, en GitHub:** Settings → Actions → General → *Workflow permissions* → «Read and write».
+**Una vez, en GitHub:** Settings → Actions → General → *Workflow permissions* → «Read and write» (en la organización `gplsi`, si está restringido a nivel de org, también en Organization settings → Actions).
 Haz un primer push (o lanza el workflow a mano) y, en el paquete publicado, decide la visibilidad:
 pública (más simple) o privada.
 
@@ -89,7 +89,7 @@ docker stop watchtower && docker rm watchtower
 docker run -d --name watchtower --restart unless-stopped   -e DOCKER_API_VERSION=1.44   -v /var/run/docker.sock:/var/run/docker.sock   containrrr/watchtower --interval 120 --cleanup web-summer-school web-cidegent demo-euipo
 ```
 
-Si el paquete de GHCR es privado: `docker login ghcr.io -u leurzz` (PAT con `read:packages`) y añade
+Si el paquete de GHCR es privado: `docker login ghcr.io -u <tu-usuario-github>` (PAT con `read:packages`) y añade
 al `docker run` `-v $HOME/.docker/config.json:/config.json:ro -e DOCKER_CONFIG=/`.
 Comprueba con `docker logs -f watchtower`.
 

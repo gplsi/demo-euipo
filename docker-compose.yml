@@ -5,7 +5,7 @@
 services:
   demo:
     container_name: demo-euipo
-    image: ghcr.io/leurzz/demo-euipo:latest
+    image: ghcr.io/gplsi/demo-euipo:latest
     pull_policy: always
     ports:
       - "${PUERTO:-4545}:8000"
