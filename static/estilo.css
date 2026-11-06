@@ -54,6 +54,13 @@ a { color: var(--azul); }
 /* ---------- Estructura ---------- */
 .principal { padding-top: 28px; padding-bottom: 56px; }
 .aviso { margin-bottom: 20px; padding: 12px 16px; border-radius: 12px; background: var(--naranja-claro); border: 1px solid var(--naranja-borde); color: var(--naranja); font-size: 14px; }
+.aviso p { margin: 0; }
+.form-clave { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.form-clave input { flex: 1 1 260px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--naranja-borde); border-radius: 8px; font: inherit; background: #fff; color: var(--tinta); }
+.form-clave button { min-height: 40px; padding: 8px 18px; border: 0; border-radius: 8px; background: var(--naranja); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+.form-clave button:disabled { opacity: .6; cursor: progress; }
+.clave-error { margin-top: 8px !important; color: #8C1D18; font-weight: 600; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .columnas { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
 .columnas > .tarjeta { flex: 1 1 440px; min-width: 0; }
 .columnas > .tarjeta.ancha { flex: 999 1 560px; }

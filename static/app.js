@@ -14,10 +14,32 @@ async function api(ruta, opciones) {
   if (!r.ok) {
     let msg = r.status + ' ' + r.statusText;
     try { msg = (await r.json()).detail || msg; } catch (e) { /* respuesta sin JSON */ }
+    if (r.status === 401) mostrarClave(msg);
     throw new Error(msg);
   }
   return r.json();
 }
+
+// ---------------- API key (la misma para los dos modelos) ----------------
+function mostrarClave(msg) {
+  $('aviso-simulado').hidden = false;
+  if (msg) { $('clave-error').textContent = msg; $('clave-error').hidden = false; }
+}
+$('form-clave').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const boton = $('guardar-clave');
+  boton.disabled = true;
+  $('clave-error').hidden = true;
+  try {
+    await postJSON('/api/clave', { clave: $('clave').value });
+    $('clave').value = '';
+    await cargarEstado();
+  } catch (e) {
+    mostrarClave(e.message);
+  } finally {
+    boton.disabled = false;
+  }
+});
 const postJSON = (ruta, cuerpo, signal) => api(ruta, {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo), signal,
 });
@@ -28,7 +50,8 @@ async function cargarEstado() {
   const e = await api('/api/estado');
   $('chip-disc').textContent = 'Discriminativo · ' + e.clasificador.nombre;
   $('chip-disc').classList.toggle('simulado', e.clasificador.modo === 'simulado');
-  $('aviso-simulado').hidden = e.clasificador.modo !== 'simulado';
+  $('aviso-simulado').hidden = e.clave.origen !== null;
+  if (e.clave.origen !== null) $('clave-error').hidden = true;
   const gen = e.generador.nombre ? e.generador.nombre + ' (' + e.generador.modo + ')' : e.generador.modo;
   $('chip-gen').textContent = 'Generativo · ' + gen;
   $('chip-gen').classList.toggle('simulado', e.generador.modo === 'no disponible');

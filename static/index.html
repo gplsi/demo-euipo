@@ -29,7 +29,15 @@
 </header>
 
 <main class="contenedor principal">
-  <div id="aviso-simulado" class="aviso" hidden>El modelo discriminativo está <strong>simulado</strong> (el servidor se arrancó sin <code>--clasificador</code>). Úsalo solo para probar la interfaz.</div>
+  <div id="aviso-simulado" class="aviso" hidden>
+    <p id="aviso-texto">Falta la <strong>API key</strong> de los modelos. Sin ella el discriminativo está <strong>simulado</strong> y solo se muestran explicaciones precalculadas.</p>
+    <form id="form-clave" class="form-clave" autocomplete="off">
+      <label class="sr-only" for="clave">API key</label>
+      <input type="password" id="clave" placeholder="API key (la misma para los dos modelos)" autocomplete="off" required>
+      <button type="submit" id="guardar-clave">Guardar</button>
+    </form>
+    <p id="clave-error" class="clave-error" hidden></p>
+  </div>
 
   <!-- ============ Una marca ============ -->
   <div id="tab-una" class="columnas">

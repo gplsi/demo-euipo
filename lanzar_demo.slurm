@@ -1,8 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=demo-euipo
-#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --mem=4G
 #SBATCH --time=08:00:00
 #SBATCH --output=demo_euipo_%j.log
 #
@@ -11,10 +10,9 @@
 # Después mira el log (demo_euipo_<id>.log): imprime el túnel SSH que hay que abrir
 # desde tu ordenador para ver la web en http://localhost:8000
 #
+# Requiere LITELLM_API_KEY en $CARPETA/.env (o exportada); si no, la web la pide.
 # Ajusta estas rutas si cambian:
 DATOS=${DATOS:-$HOME/demoEUIPO}
-CLASIFICADOR=${CLASIFICADOR:-/home/gplsi/GPLSI/codigos/transformer_model_classifier/models/comment_euipo_refusals_v1/checkpoint-17212}
-GENERADOR=${GENERADOR:-/home/gplsi/GPLSI/ALIA/modelos/Instruction/EUIPO_Aitana_2B_S_Instruct_absolute_refusals_v1/final}
 PUERTO=${PUERTO:-8000}
 CARPETA=$(cd "$(dirname "$0")" && pwd)
 [ -n "$SLURM_SUBMIT_DIR" ] && CARPETA=$SLURM_SUBMIT_DIR

@@ -12,15 +12,19 @@ Backend FastAPI que sirve el frontend de static/ y expone:
   POST /api/lote/{id}/detener    detiene el lote; quedan los resultados de lo ya clasificado
   GET  /api/lote/{id}/csv        predicciones de todo el lote
 
-Uso (ver README.md):
-  python app.py --test test.jsonl --predicciones predictions.jsonl \
-      --clasificador /ruta/checkpoint-17212 --generador /ruta/EUIPO_Aitana_2B_...
+Los dos modelos se consumen por HTTP desde el gateway LiteLLM (misma API key para ambos):
+  POST {base}/v1/classify          clasificador
+  POST {base}/v1/chat/completions  generador
+
+Uso (ver README.md): definir LITELLM_API_KEY en .env (o escribirla en la interfaz) y
+  python app.py --test test.jsonl --predicciones predictions.jsonl
 """
 import argparse
 import csv
 import hashlib
 import io
 import json
+import os
 import random
 import re
 import tempfile
@@ -29,6 +33,7 @@ import time
 import uuid
 from pathlib import Path
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -36,11 +41,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 AQUI = Path(__file__).resolve().parent
-# Nombres a mostrar cuando los modelos están copiados en app/modelos/
-NOMBRES_LOCALES = {
-    "discriminativo": "Aitana-euipo-absolute-refusals-1.0 (v1)",
-    "generativo": "EUIPO_Aitana_2B_S_Instruct_absolute_refusals_v1",
-}
+try:
+    from dotenv import load_dotenv
+    load_dotenv(AQUI / ".env")
+except ImportError:  # sin python-dotenv, solo variables de entorno reales
+    pass
+
+BASE_URL_DEF = "https://litellm.tools.gplsi.es"
+MODELO_CLASIFICADOR_DEF = "Aitana-euipo-absolute-refusals-1.0"
+MODELO_GENERADOR_DEF = "EUIPO_Aitana_2B_S_Instruct_absolute_refusals_v1"
 
 # Prompts del modelo generativo, tal cual en la tarjeta de entrenamiento.
 SYSTEM_PROMPT = (
@@ -139,42 +148,106 @@ def a_bool(v):
 # Modelos
 # --------------------------------------------------------------------------
 
-def _dispositivo(pedido):
-    import torch
-    if pedido and pedido != "auto":
-        return pedido
-    return "cuda" if torch.cuda.is_available() else "cpu"
+class ClienteLiteLLM:
+    """Cliente HTTP del gateway LiteLLM. Una sola API key sirve para los dos modelos.
+
+    Prioridad de la clave: variable de entorno / .env (LITELLM_API_KEY) > la escrita en la interfaz.
+    La clave de la interfaz solo vive en memoria del proceso.
+    """
+
+    def __init__(self, base_url, clave_env=None):
+        self.base_url = base_url.rstrip("/")
+        self.clave_env = (clave_env or "").strip() or None
+        self.clave_ui = None
+
+    @property
+    def clave(self):
+        return self.clave_env or self.clave_ui
+
+    @property
+    def origen(self):
+        return "env" if self.clave_env else ("interfaz" if self.clave_ui else None)
+
+    def post(self, ruta, cuerpo, timeout=180, clave=None):
+        clave = clave or self.clave
+        if not clave:
+            raise HTTPException(401, "Falta la API key de los modelos (LITELLM_API_KEY o campo de la interfaz)")
+        try:
+            r = httpx.post(self.base_url + ruta, json=cuerpo, timeout=timeout,
+                           headers={"Authorization": f"Bearer {clave}"})
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"No se pudo contactar con {self.base_url}: {type(e).__name__}")
+        if r.status_code in (401, 403):
+            raise HTTPException(401, "API key inválida o sin permiso para este modelo")
+        if r.status_code >= 400:
+            codigo = r.status_code if r.status_code < 500 else 502
+            raise HTTPException(codigo, f"El servidor de modelos respondió {r.status_code}: {r.text[:300]}")
+        try:
+            return r.json()
+        except ValueError:
+            raise HTTPException(502, "Respuesta no JSON del servidor de modelos")
 
 
-class Clasificador:
-    modo = "modelo"
+_POSITIVOS = {"true", "1", "label_1", "yes", "refusal", "positive", "absolute_refusal"}
 
-    def __init__(self, ruta, tokenizador=None, dispositivo="auto", max_len=512):
-        import torch
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
-        self.torch = torch
-        self.dev = _dispositivo(dispositivo)
-        self.tok = AutoTokenizer.from_pretrained(tokenizador or ruta)
-        self.model = AutoModelForSequenceClassification.from_pretrained(ruta).to(self.dev).eval()
-        self.max_len = max_len
-        self.nombre = NOMBRES_LOCALES.get(Path(ruta).name, Path(ruta).parent.name + "/" + Path(ruta).name)
-        id2label = {int(k): str(v).lower() for k, v in self.model.config.id2label.items()}
-        positivos = {"true", "1", "label_1", "yes", "refusal", "positive"}
-        self.idx = next((i for i, l in id2label.items() if l in positivos), 1)
-        self.n_labels = self.model.config.num_labels
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _prob_positiva(item):
+    """Probabilidad de la clase positiva a partir de un resultado de /v1/classify.
+
+    El formato exacto depende del servidor, así que se aceptan las variantes habituales:
+    número, [p0, p1], {"label", "score"}, [{"label", "score"}, ...] o {"true": p, "false": q}.
+    """
+    if _num(item):
+        return float(item)
+    if isinstance(item, dict):
+        if "label" in item and any(k in item for k in ("score", "probability", "prob")):
+            p = float(next(item[k] for k in ("score", "probability", "prob") if k in item))
+            return p if str(item["label"]).strip().lower() in _POSITIVOS else 1.0 - p
+        for k in ("probs", "probabilities", "scores", "probability", "prob", "score"):
+            if k in item:
+                return _prob_positiva(item[k])
+        for k, v in item.items():
+            if str(k).strip().lower() in _POSITIVOS and _num(v):
+                return float(v)
+    if isinstance(item, list) and item:
+        if all(_num(v) for v in item):
+            return float(item[1] if len(item) > 1 else item[0])
+        if all(isinstance(v, dict) for v in item):
+            for d in item:
+                if str(d.get("label", "")).strip().lower() in _POSITIVOS:
+                    return _prob_positiva(d)
+            if len(item) == 1:
+                return _prob_positiva(item[0])
+    raise ValueError(f"formato de respuesta de /v1/classify no reconocido: {json.dumps(item)[:200]}")
+
+
+class ClasificadorRemoto:
+    modo = "remoto"
+
+    def __init__(self, cliente, modelo):
+        self.cliente = cliente
+        self.nombre = modelo
+        self.modelo = modelo
 
     def predecir(self, textos, lote=32):
         probs = []
-        with self.torch.inference_mode():
-            for i in range(0, len(textos), lote):
-                enc = self.tok(textos[i:i + lote], truncation=True, max_length=self.max_len,
-                               padding=True, return_tensors="pt").to(self.dev)
-                logits = self.model(**enc).logits.float()
-                if self.n_labels == 1:
-                    p = self.torch.sigmoid(logits[:, 0])
-                else:
-                    p = self.torch.softmax(logits, dim=-1)[:, self.idx]
-                probs.extend(p.cpu().tolist())
+        for i in range(0, len(textos), lote):
+            resp = self.cliente.post("/v1/classify", {"model": self.modelo, "input": textos[i:i + lote]})
+            items = resp
+            if isinstance(resp, dict):
+                items = next((resp[k] for k in ("data", "results", "predictions", "outputs", "output")
+                              if k in resp), None)
+            if not isinstance(items, list) or len(items) != len(textos[i:i + lote]):
+                raise HTTPException(502, "Respuesta inesperada de /v1/classify: "
+                                         + json.dumps(resp)[:200])
+            try:
+                probs.extend(_prob_positiva(it) for it in items)
+            except (ValueError, TypeError) as e:
+                raise HTTPException(502, str(e))
         return probs
 
 
@@ -198,57 +271,50 @@ class ClasificadorSimulado:
         return out
 
 
-class Generador:
-    def __init__(self, ruta, dispositivo="auto", max_new_tokens=320, precision="auto"):
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        self.torch = torch
-        self.dev = _dispositivo(dispositivo)
-        self.tok = AutoTokenizer.from_pretrained(ruta)
-        if precision == "auto":  # bf16 en GPU; en CPU float32 (más RAM, ~9 GB, pero más compatible)
-            precision = "bfloat16" if self.dev.startswith("cuda") else "float32"
-        dtype = getattr(torch, precision)
-        try:
-            self.model = AutoModelForCausalLM.from_pretrained(ruta, dtype=dtype)
-        except TypeError:  # transformers antiguos
-            self.model = AutoModelForCausalLM.from_pretrained(ruta, torch_dtype=dtype)
-        self.model.to(self.dev).eval()
+class GeneradorRemoto:
+    def __init__(self, cliente, modelo, max_new_tokens=320):
+        self.cliente = cliente
+        self.nombre = modelo
+        self.modelo = modelo
         self.max_new_tokens = max_new_tokens
-        self.nombre = NOMBRES_LOCALES.get(Path(ruta).name, Path(ruta).name)
-        if self.nombre == "final":
-            self.nombre = Path(ruta).parent.name
-        self.lock = threading.Lock()
 
-    def _plantilla(self, usuario):
-        msgs = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": usuario}]
+    def _peticion(self, usuario):
+        def cuerpo(msgs):
+            return {"model": self.modelo, "messages": msgs, "temperature": 0,
+                    "max_tokens": self.max_new_tokens}
         try:
-            return self.tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
-        except Exception:  # plantillas sin rol system
-            msgs = [{"role": "user", "content": SYSTEM_PROMPT + "\n\n" + usuario}]
-            return self.tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
+            resp = self.cliente.post("/v1/chat/completions", cuerpo(
+                [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": usuario}]))
+        except HTTPException as e:
+            if e.status_code != 400:
+                raise
+            # plantillas sin rol system: se funde en el mensaje de usuario
+            resp = self.cliente.post("/v1/chat/completions", cuerpo(
+                [{"role": "user", "content": SYSTEM_PROMPT + "\n\n" + usuario}]))
+        try:
+            return (resp["choices"][0]["message"]["content"] or "").strip()
+        except (KeyError, IndexError, TypeError):
+            raise HTTPException(502, "Respuesta inesperada de /v1/chat/completions: " + json.dumps(resp)[:200])
 
     def generar(self, usuario, detener=None):
-        """detener: threading.Event opcional; si se activa, la generación para en el siguiente token."""
-        from transformers import StoppingCriteria, StoppingCriteriaList
-        torch = self.torch
+        """detener: threading.Event opcional; si se activa se descarta la respuesta y devuelve None."""
+        res = {}
 
-        class Detener(StoppingCriteria):
-            def __call__(self, input_ids, scores, **kwargs):
-                return torch.full((input_ids.shape[0],), detener.is_set(), dtype=torch.bool,
-                                  device=input_ids.device)
+        def trabajo():
+            try:
+                res["ok"] = self._peticion(usuario)
+            except Exception as e:  # noqa: BLE001 — se relanza en el hilo que espera
+                res["error"] = e
 
-        texto = self._plantilla(usuario)
-        enc = self.tok(texto, return_tensors="pt", add_special_tokens=False).to(self.dev)
-        pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else self.tok.eos_token_id
-        extra = {"stopping_criteria": StoppingCriteriaList([Detener()])} if detener else {}
-        with self.lock, self.torch.inference_mode():
-            if detener and detener.is_set():  # se detuvo mientras esperaba su turno
+        hilo = threading.Thread(target=trabajo, daemon=True)
+        hilo.start()
+        while hilo.is_alive():
+            hilo.join(0.2)
+            if detener and detener.is_set():
                 return None
-            out = self.model.generate(**enc, max_new_tokens=self.max_new_tokens,
-                                      do_sample=False, pad_token_id=pad, **extra)
-        if detener and detener.is_set():
-            return None
-        return self.tok.decode(out[0, enc["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+        if "error" in res:
+            raise res["error"]
+        return res["ok"]
 
 
 # --------------------------------------------------------------------------
@@ -313,6 +379,10 @@ class DatosTest:
 # Aplicación
 # --------------------------------------------------------------------------
 
+class ClaveApi(BaseModel):
+    clave: str
+
+
 class Peticion(BaseModel):
     name: str
     goods: str = ""
@@ -340,12 +410,16 @@ def crear_app(args):
         lote_fijo = json.loads(Path(args.ejemplos).read_text(encoding="utf-8")).get("lote", [])
         print(f"[datos] lote de ejemplo fijo: {len(lote_fijo)} marcas de {Path(args.ejemplos).name}")
 
-    if args.clasificador:
-        clasificador = Clasificador(args.clasificador, args.tokenizador, args.dispositivo, args.max_len)
-    else:
-        print("[aviso] Sin --clasificador: el discriminativo está SIMULADO (solo para probar la interfaz).")
-        clasificador = ClasificadorSimulado(datos.etiquetas)
-    generador = Generador(args.generador, args.dispositivo, args.max_new_tokens, args.precision) if args.generador else None
+    cliente = ClienteLiteLLM(args.base_url, os.environ.get("LITELLM_API_KEY"))
+    remoto = ClasificadorRemoto(cliente, args.modelo_clasificador)
+    simulado = ClasificadorSimulado(datos.etiquetas)
+    generador = GeneradorRemoto(cliente, args.modelo_generador, args.max_new_tokens)
+    if not cliente.clave:
+        print("[aviso] Sin LITELLM_API_KEY: la interfaz pedirá la clave; mientras tanto el "
+              "discriminativo está SIMULADO.")
+
+    def clasificador_actual():
+        return remoto if cliente.clave else simulado
 
     precalculadas = {}
     if args.predicciones:
@@ -367,19 +441,34 @@ def crear_app(args):
 
     @app.get("/api/estado")
     def estado():
-        if generador and not args.usar_precalculadas:
-            gen_modo = "modelo"
+        clf = clasificador_actual()
+        if cliente.clave and not args.usar_precalculadas:
+            gen_modo = "remoto"
         elif precalculadas:
-            gen_modo = "precalculado" + (" + modelo" if generador else "")
+            gen_modo = "precalculado" + (" + remoto" if cliente.clave else "")
         else:
-            gen_modo = "modelo" if generador else "no disponible"
+            gen_modo = "no disponible"
         return {
-            "clasificador": {"modo": clasificador.modo, "nombre": clasificador.nombre},
-            "generador": {"modo": gen_modo, "nombre": generador.nombre if generador else
+            "clasificador": {"modo": clf.modo, "nombre": clf.nombre},
+            "generador": {"modo": gen_modo, "nombre": generador.nombre if cliente.clave else
                           ("predictions.jsonl" if precalculadas else "")},
+            "clave": {"origen": cliente.origen},
             "umbral": args.umbral, "semilla": args.semilla, "muestreo": args.muestreo,
             "lote_ejemplo": bool(datos.ruta),
         }
+
+    @app.post("/api/clave")
+    def guardar_clave(c: ClaveApi):
+        if cliente.clave_env:
+            raise HTTPException(409, "La API key está definida en el servidor (.env) y tiene prioridad")
+        clave = c.clave.strip()
+        if not clave:
+            raise HTTPException(400, "Introduce la API key")
+        # Comprueba la clave con una llamada mínima antes de guardarla (solo en memoria)
+        cliente.post("/v1/classify", {"model": args.modelo_clasificador, "input": ["test"]},
+                     timeout=60, clave=clave)
+        cliente.clave_ui = clave
+        return {"origen": cliente.origen}
 
     @app.get("/api/candidatos")
     def get_candidatos(aleatorio: bool = False):
@@ -402,9 +491,10 @@ def crear_app(args):
             raise HTTPException(400, "Falta el nombre de la marca")
         gs = resolver_gs(p)
         entrada = entrada_discriminativo(p.name.strip(), gs)
-        prob = clasificador.predecir([entrada])[0]
+        clf = clasificador_actual()
+        prob = clf.predecir([entrada])[0]
         return {"entrada": entrada, "probabilidad": prob, "denegacion": prob >= args.umbral,
-                "umbral": args.umbral, "modo": clasificador.modo}
+                "umbral": args.umbral, "modo": clf.modo}
 
     detenciones = {}  # peticion_id -> threading.Event
 
@@ -419,9 +509,9 @@ def crear_app(args):
             raise HTTPException(400, "Falta el nombre de la marca")
         prompt = prompt_generativo(p.name.strip(), resolver_gs(p))
         t0 = time.time()
-        if prompt in precalculadas and (args.usar_precalculadas or not generador):
+        if prompt in precalculadas and (args.usar_precalculadas or not cliente.clave):
             crudo, fuente = precalculadas[prompt], "precalculada"
-        elif generador:
+        elif cliente.clave:
             ev = detenciones.setdefault(p.peticion_id, threading.Event()) if p.peticion_id else None
             try:
                 crudo, fuente = generador.generar(prompt, ev), "modelo"
@@ -430,8 +520,8 @@ def crear_app(args):
             if crudo is None:
                 raise HTTPException(409, "Explicación detenida")
         else:
-            raise HTTPException(503, "No hay modelo generativo cargado y esta marca no está en "
-                                     "predictions.jsonl. Arranca con --generador.")
+            raise HTTPException(401, "Falta la API key para el modelo generativo y esta marca "
+                                     "no está en predictions.jsonl.")
         tipo, texto = parsear_salida(crudo)
         return {"tipo": tipo, "explicacion": texto, "crudo": crudo, "fuente": fuente,
                 "prompt": prompt, "segundos": round(time.time() - t0, 2)}
@@ -444,7 +534,7 @@ def crear_app(args):
             buf, filas = [], []
 
             def vaciar():
-                probs = clasificador.predecir([b[1] for b in buf], args.lote)
+                probs = clasificador_actual().predecir([b[1] for b in buf], args.lote)
                 for (fila, _), p in zip(buf, probs):
                     fila["prob"] = p
                     fila["pred"] = p >= args.umbral
@@ -568,18 +658,15 @@ def main():
     ap = argparse.ArgumentParser(description="Demostrador EUIPO (caso de uso 1)")
     ap.add_argument("--test", help="test.jsonl del dataset (candidatos y lote de ejemplo)")
     ap.add_argument("--predicciones", help="predictions.jsonl con salidas del generativo")
-    ap.add_argument("--clasificador", help="checkpoint del modelo discriminativo")
-    ap.add_argument("--tokenizador", help="tokenizador si el checkpoint no lo incluye")
-    ap.add_argument("--generador", help="carpeta del modelo generativo instruido")
-    ap.add_argument("--sin-generador", action="store_true",
-                    help="no cargar el generativo (solo explicaciones de predictions.jsonl)")
+    ap.add_argument("--base-url", default=os.environ.get("LITELLM_BASE_URL", BASE_URL_DEF),
+                    help="gateway LiteLLM (también LITELLM_BASE_URL)")
+    ap.add_argument("--modelo-clasificador",
+                    default=os.environ.get("CLASIFICADOR_MODEL", MODELO_CLASIFICADOR_DEF))
+    ap.add_argument("--modelo-generador",
+                    default=os.environ.get("GENERADOR_MODEL", MODELO_GENERADOR_DEF))
     ap.add_argument("--usar-precalculadas", action="store_true",
-                    help="si la marca está en predictions.jsonl, usar esa salida aunque haya modelo")
-    ap.add_argument("--dispositivo", default="auto", help="auto, cpu, cuda, cuda:0...")
-    ap.add_argument("--precision", default="auto", choices=["auto", "bfloat16", "float16", "float32"],
-                    help="tipo de los pesos del generativo (bfloat16 en CPU usa la mitad de RAM)")
+                    help="si la marca está en predictions.jsonl, usar esa salida aunque haya API key")
     ap.add_argument("--umbral", type=float, default=0.5)
-    ap.add_argument("--max-len", type=int, default=512)
     ap.add_argument("--max-new-tokens", type=int, default=320)
     ap.add_argument("--lote", type=int, default=32, help="tamaño de lote del discriminativo")
     ap.add_argument("--semilla", type=int, default=42)
@@ -593,21 +680,16 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
-    # Rutas por defecto: modelos en app/modelos/ y datos en la carpeta de arriba (demoEUIPO)
+    # Rutas por defecto: datos en la carpeta de arriba (demoEUIPO)
     por_defecto = {
-        "clasificador": AQUI / "modelos" / "discriminativo" / "config.json",
-        "generador": AQUI / "modelos" / "generativo" / "config.json",
         "test": AQUI.parent / "test.jsonl",
         "predicciones": AQUI.parent / "predictions.jsonl",
         "ejemplos": AQUI / "ejemplos.json",
     }
     for opcion, ruta in por_defecto.items():
         if getattr(args, opcion) is None and ruta.is_file():
-            valor = ruta.parent if ruta.name == "config.json" else ruta
-            setattr(args, opcion, str(valor))
-            print(f"[config] --{opcion} {valor}")
-    if args.sin_generador:
-        args.generador = None
+            setattr(args, opcion, str(ruta))
+            print(f"[config] --{opcion} {ruta}")
     uvicorn.run(crear_app(args), host=args.host, port=args.port)
 
 

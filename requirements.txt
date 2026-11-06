@@ -1,5 +1,5 @@
 fastapi>=0.110
 uvicorn>=0.29
 python-multipart>=0.0.9
-transformers>=5.0
-torch>=2.1
+httpx>=0.27
+python-dotenv>=1.0

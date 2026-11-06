@@ -7,13 +7,15 @@ Toma marcas de test.jsonl (denegadas y aceptadas) y las clasifica tres veces:
 Un modelo que se fija en el contenido debería dar casi lo mismo en las tres.
 
 Uso:
-  python prueba_formato.py --clasificador modelos/discriminativo --test ../test.jsonl --n 150
+  LITELLM_API_KEY=... python prueba_formato.py --test ../test.jsonl --n 150
 """
 import argparse
 import json
+import os
 import random
 
-from app import Clasificador, entrada_discriminativo, a_bool
+from app import (BASE_URL_DEF, MODELO_CLASIFICADOR_DEF, ClasificadorRemoto, ClienteLiteLLM,
+                 a_bool, entrada_discriminativo)
 
 
 def variante(gs, modo):
@@ -30,11 +32,11 @@ def variante(gs, modo):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--clasificador", default="modelos/discriminativo")
+    ap.add_argument("--base-url", default=os.environ.get("LITELLM_BASE_URL", BASE_URL_DEF))
+    ap.add_argument("--modelo", default=os.environ.get("CLASIFICADOR_MODEL", MODELO_CLASIFICADOR_DEF))
     ap.add_argument("--test", default="../test.jsonl")
     ap.add_argument("--n", type=int, default=150, help="marcas por clase")
     ap.add_argument("--semilla", type=int, default=1)
-    ap.add_argument("--dispositivo", default="auto")
     args = ap.parse_args()
 
     den, acep = [], []
@@ -46,7 +48,7 @@ def main():
     rng = random.Random(args.semilla)
     grupos = {"denegadas": rng.sample(den, args.n), "aceptadas": rng.sample(acep, args.n)}
 
-    c = Clasificador(args.clasificador, dispositivo=args.dispositivo)
+    c = ClasificadorRemoto(ClienteLiteLLM(args.base_url, os.environ.get("LITELLM_API_KEY")), args.modelo)
     print(f"{'grupo':<10} {'formato':<6} % predicho denegación")
     for nombre, filas in grupos.items():
         for modo in ("orig", "sin", "con"):

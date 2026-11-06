@@ -16,46 +16,44 @@ Aplicación web (FastAPI + HTML/JS sin dependencias) que implementa la tarjeta
 
 | Archivo | Qué es |
 |---|---|
-| `app.py` | servidor, carga de modelos y API |
+| `app.py` | servidor, cliente de los modelos (LiteLLM) y API |
 | `static/` | frontend (`index.html`, `estilo.css`, `app.js`) |
 | `ejemplos.json` | ids fijos del lote de ejemplo (200 marcas de test, 30 denegadas; el v1 las acierta todas) |
 | `Dockerfile`, `docker-compose.yml`, `.env.example` | ejecución con Docker |
-| `lanzar_demo.slurm` | lanzamiento en lamarr con GPU |
+| `lanzar_demo.slurm` | lanzamiento en lamarr (ya sin GPU) |
 | `requirements.txt` | dependencias |
 
-Los dos modelos están en `modelos/` con **Git LFS** (unos 5,5 GB). Antes de clonar:
-`git lfs install`. El generativo está partido en 4 archivos `model-0000X-of-00004.safetensors`
-(con `model.safetensors.index.json`), porque GitHub no admite archivos LFS de más de 2 GB;
-transformers lo carga igual. El discriminativo es el **v1**, el publicado en Hugging Face
-(`gplsi/Aitana-euipo-absolute-refusals-1.0`, checkpoint-17212). La demo le pasa la entrada
-tal cual, con el mismo formato con el que se entrenó.
+Los dos modelos **no se cargan en local**: se consumen por API desde el gateway LiteLLM
+(`https://litellm.tools.gplsi.es`) con **una única API key** para ambos:
+
+- `POST /v1/classify` → `Aitana-euipo-absolute-refusals-1.0` (discriminativo, v1)
+- `POST /v1/chat/completions` → `EUIPO_Aitana_2B_S_Instruct_absolute_refusals_v1` (generativo)
+
+La clave se toma de `LITELLM_API_KEY` (fichero `.env` o variable de entorno), que tiene prioridad.
+Si no está definida, la web muestra un campo para escribirla; se valida con una llamada y se guarda
+solo en memoria del servidor (no en disco). Sin clave, el discriminativo queda simulado y las
+explicaciones salen de `predictions.jsonl`. La carpeta `modelos/` y `herramientas/` ya no se usan.
 
 Los `.jsonl` (`test.jsonl`, `predictions.jsonl`) no están en el repositorio: van en la carpeta de arriba.
 
 ## Con Docker
 
-Estructura esperada (la misma que en `demoEUIPO`; `modelos/` ya viene en el repositorio):
+Estructura esperada (la misma que en `demoEUIPO`):
 
 ```
 demoEUIPO/
 ├── test.jsonl
 ├── predictions.jsonl
 └── app/                     ← este repositorio
-    └── modelos/
-        ├── discriminativo/  (config.json, model.safetensors, tokenizer*)
-        └── generativo/      (config.json, model.safetensors, tokenizer*, chat_template.jinja)
 ```
 
 ```bash
 cd app
-cp .env.example .env          # opcional: cambiar rutas, puerto u opciones
+cp .env.example .env          # pon LITELLM_API_KEY (o déjala vacía y escríbela en la web)
 docker compose up --build     # http://localhost:8000
 ```
 
-- La imagen trae PyTorch para CPU. Con GPU NVIDIA: `docker compose build --build-arg
-  TORCH_INDEX=https://download.pytorch.org/whl/cu124` y descomentar `deploy` en `docker-compose.yml`.
-- En CPU el generativo en bfloat16 necesita unos 6 GB de RAM para Docker. Con `OPCIONES=--sin-generador`
-  solo se usan las explicaciones precalculadas de `predictions.jsonl`.
+- La imagen es ligera (sin PyTorch ni modelos).
 - Si falta `test.jsonl` o `predictions.jsonl`, la demo arranca igual, pero sin desplegable/lote
   de ejemplo o sin explicaciones precalculadas (Docker crea una carpeta vacía en su lugar).
 
@@ -65,10 +63,10 @@ Datos que usa (de la carpeta `demoEUIPO`):
 
 ## Modelos
 
-- Discriminativo: ModernBERT (`ModernBertForSequenceClassification`), `id2label` = {0: false, 1: true}.
-- Generativo: Aitana 2B (Llama) con plantilla ChatML (`chat_template.jinja`), que antepone el
-  system prompt propio de Aitana al de la tarea, igual que en el entrenamiento con axolotl.
-- Hace falta `transformers` 5.x: el config del generativo se guardó con la 5.14.
+- Discriminativo: ModernBERT; el endpoint `/v1/classify` devuelve la probabilidad de cada clase y la demo
+  usa la de la positiva (`true`, `LABEL_1`, …). El parser acepta varios formatos de respuesta habituales.
+- Generativo: Aitana 2B con plantilla ChatML; se llama con `messages` (system + user), `temperature=0`
+  y `max_tokens=--max-new-tokens`. Si el servidor rechaza el rol `system`, se funde en el mensaje de usuario.
 
 ## Sesgo del discriminativo: el punto final
 
@@ -104,79 +102,36 @@ En el cuadro de texto los bienes y servicios van **una clase por línea** con su
 delante (`9. Computer games`). Si eliges un candidato y no lo editas, se usa el
 `goods_and_services` original del dataset, sin pérdidas.
 
-## Arrancar en lamarr (modelos reales)
+## Arrancar sin Docker
 
 ```bash
-# una vez
-cd ~/demo_euipo            # esta carpeta copiada a lamarr
-python -m venv .venv && source .venv/bin/activate
+cd app
+python -m venv .venv && source .venv/bin/activate     # en Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-# copia test.jsonl y predictions.jsonl a ~/demoEUIPO (o exporta DATOS=/otra/ruta)
-
-sbatch lanzar_demo.slurm
-cat demo_euipo_<id>.log    # imprime el túnel SSH
+cp .env.example .env                                  # y rellena LITELLM_API_KEY
+python app.py --test ../test.jsonl --predicciones ../predictions.jsonl   # http://localhost:8000
 ```
 
-En tu ordenador: `ssh -N -L 8000:<nodo>:8000 usuario@lamarr` y abre http://localhost:8000.
+En lamarr: `sbatch lanzar_demo.slurm` (mira el log para el túnel SSH).
 
-Sin Slurm (en un nodo con GPU directamente):
-
-```bash
-python app.py --test test.jsonl --predicciones predictions.jsonl \
-  --clasificador /home/gplsi/GPLSI/codigos/transformer_model_classifier/models/comment_euipo_refusals_v1/checkpoint-17212 \
-  --generador /home/gplsi/GPLSI/ALIA/modelos/Instruction/EUIPO_Aitana_2B_S_Instruct_absolute_refusals_v1/final
-```
-
-## Arrancar en tu ordenador con los modelos copiados
-
-Si existen `app/modelos/discriminativo/` y `app/modelos/generativo/` (copiados de lamarr:
-el checkpoint-17212 y la carpeta `final` del generativo), y `test.jsonl` y
-`predictions.jsonl` están en la carpeta de arriba (`demoEUIPO`), basta con:
-
-```powershell
-cd C:\Users\UA\Documents\extras\demoEUIPO\app
-python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python app.py
-```
-
-y abrir http://localhost:8000. Arrancar tarda alrededor de un minuto, porque lee todo `test.jsonl` y carga los dos modelos.
-En CPU el generativo (2B) ocupa unos 9 GB de RAM y tarda bastante en cada explicación;
-`--usar-precalculadas` usa `predictions.jsonl` cuando la marca está ahí, y
-`--sin-generador` no lo carga (solo explicaciones precalculadas) y `--precision bfloat16`
-lo carga con la mitad de RAM (unos 4,5 GB).
-
-## Probar la interfaz sin modelos
-
-```bash
-pip install fastapi uvicorn python-multipart
-python app.py --test test.jsonl --predicciones predictions.jsonl
-```
-
-Sin `--clasificador` (y sin `app/modelos/discriminativo/`) el discriminativo queda **simulado** (usa la etiqueta del test y la
-web lo avisa con una franja naranja). Sin `--generador` las explicaciones salen de
-`predictions.jsonl`, así que solo funcionan para marcas denegadas del test.
-(`torch` y `transformers` solo hacen falta con modelos reales.)
+Sin API key la interfaz arranca igual: el discriminativo queda **simulado** (usa la etiqueta del test,
+con franja naranja) y las explicaciones solo existen para marcas denegadas de `predictions.jsonl`.
 
 ## Opciones útiles
 
 | Opción | Por defecto | |
 |---|---|---|
 | `--umbral` | 0.5 | probabilidad a partir de la cual es denegación |
-| `--usar-precalculadas` | no | con generador cargado, usar igualmente `predictions.jsonl` si la marca está (más rápido) |
-| `--tokenizador` | el del checkpoint | si el checkpoint no guarda el tokenizador, la ruta del modelo base |
+| `--usar-precalculadas` | no | con API key, usar igualmente `predictions.jsonl` si la marca está (más rápido) |
 | `--muestreo` | `estratificado` | `estratificado` = 5 denegadas + 5 no; `aleatorio` = muestreo simple (con semilla 42 sale 0 denegadas, porque solo el 1,4 % lo son) |
 | `--semilla`, `--n-candidatos`, `--grupo-candidatos` | 42, 10, 100 | desplegable y botón aleatorio (elige 10 de un grupo de 100) |
 | `--ejemplo-n`, `--ejemplo-pos` | 200, 30 | lote de ejemplo del botón «Usar lote de ejemplo» |
 | `--lote` | 32 | tamaño de lote del discriminativo en la evaluación |
-| `--dispositivo` | auto | `cuda`, `cuda:1`, `cpu`… |
-
-La etiqueta positiva del clasificador se toma de `id2label` (`True`, `LABEL_1`, …);
-si no se reconoce se asume el índice 1.
+| `--base-url`, `--modelo-clasificador`, `--modelo-generador` | ver `.env.example` | gateway y nombres de modelo (también `LITELLM_BASE_URL`, `CLASIFICADOR_MODEL`, `GENERADOR_MODEL`) |
 
 ## API
 
-`GET /api/estado`, `GET /api/candidatos` (`?aleatorio=1`), `POST /api/clasificar` y `POST /api/explicar`
+`GET /api/estado`, `POST /api/clave` (`{"clave"}`), `GET /api/candidatos` (`?aleatorio=1`), `POST /api/clasificar` y `POST /api/explicar`
 (`{"name", "goods", "candidato_id"?, "peticion_id"?}`), `POST /api/detener/{peticion_id}`
 (corta la generación en curso), `POST /api/lote` (multipart `archivo`), `POST /api/lote/ejemplo`,
 `GET /api/lote/{id}`, `POST /api/lote/{id}/detener` (para y deja los resultados de lo ya clasificado),
