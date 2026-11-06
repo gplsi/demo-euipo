@@ -1,10 +1,14 @@
-# Arranque: copia .env.example a .env, pon LITELLM_API_KEY y ejecuta `docker compose up --build`.
+# Servidor: copia este fichero y .env.example (como .env) a una carpeta, pon LITELLM_API_KEY y ejecuta
+#   docker compose up -d
+# El Watchtower que ya corre en el servidor debe incluir `demo-euipo` en su lista de contenedores
+# (ver README). Aquí no se arranca otro Watchtower.
 services:
   demo:
-    build: .
-    image: demo-euipo
+    container_name: demo-euipo
+    image: ghcr.io/leurzz/demo-euipo:latest
+    pull_policy: always
     ports:
-      - "${PUERTO:-8000}:8000"
+      - "${PUERTO:-4545}:8000"
     env_file:
       - .env
     volumes:

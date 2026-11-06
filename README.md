@@ -61,6 +61,41 @@ Datos que usa (de la carpeta `demoEUIPO`):
 - `test.jsonl`: partición de test (candidatos del desplegable y lote de ejemplo).
 - `predictions.jsonl`: salidas del generativo para las 2.199 marcas denegadas del test.
 
+## Despliegue automático (GitHub Actions + GHCR + Watchtower)
+
+Cada push a `main` ejecuta `.github/workflows/docker.yml`, que construye la imagen y la publica en
+`ghcr.io/leurzz/demo-euipo` (tags `latest` y `sha-<commit>`). Watchtower, en el servidor, comprueba
+el registro cada 5 minutos y recrea el contenedor `demo` si hay una imagen nueva.
+
+**Una vez, en GitHub:** Settings → Actions → General → *Workflow permissions* → «Read and write».
+Haz un primer push (o lanza el workflow a mano) y, en el paquete publicado, decide la visibilidad:
+pública (más simple) o privada.
+
+**Una vez, en el servidor:**
+
+```bash
+mkdir -p /opt/demo-euipo && cd /opt/demo-euipo
+# copia aquí docker-compose.yml y .env.example (renómbralo a .env y pon LITELLM_API_KEY)
+# copia test.jsonl y predictions.jsonl y ajusta TEST_JSONL / PREDICCIONES_JSONL en .env
+docker compose up -d        # crea el contenedor «demo-euipo»
+```
+
+Se reutiliza el Watchtower que ya corre en el servidor. Ese Watchtower solo vigila los contenedores
+cuyo nombre se le pasa como argumento, así que hay que relanzarlo **añadiendo `demo-euipo`** y
+conservando lo demás (`DOCKER_API_VERSION`, intervalo, otros nombres):
+
+```bash
+docker stop watchtower && docker rm watchtower
+docker run -d --name watchtower --restart unless-stopped   -e DOCKER_API_VERSION=1.44   -v /var/run/docker.sock:/var/run/docker.sock   containrrr/watchtower --interval 120 --cleanup web-summer-school web-cidegent demo-euipo
+```
+
+Si el paquete de GHCR es privado: `docker login ghcr.io -u leurzz` (PAT con `read:packages`) y añade
+al `docker run` `-v $HOME/.docker/config.json:/config.json:ro -e DOCKER_CONFIG=/`.
+Comprueba con `docker logs -f watchtower`.
+
+Notas: en el servidor pon la clave en `.env` (la escrita en la web vive solo en memoria y se pierde
+al recrear el contenedor). Para desarrollar en local: `docker compose -f docker-compose.dev.yml up --build`.
+
 ## Modelos
 
 - Discriminativo: ModernBERT; el endpoint `/v1/classify` devuelve la probabilidad de cada clase y la demo

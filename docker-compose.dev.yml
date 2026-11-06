@@ -1,0 +1,14 @@
+# Desarrollo local: construye la imagen desde el código.
+#   docker compose -f docker-compose.dev.yml up --build
+services:
+  demo:
+    build: .
+    image: demo-euipo
+    ports:
+      - "${PUERTO:-4545}:8000"
+    env_file:
+      - .env
+    volumes:
+      - ${TEST_JSONL:-../test.jsonl}:/srv/test.jsonl:ro
+      - ${PREDICCIONES_JSONL:-../predictions.jsonl}:/srv/predictions.jsonl:ro
+    command: ${OPCIONES:-}
