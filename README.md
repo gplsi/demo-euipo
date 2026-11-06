@@ -20,7 +20,7 @@ Aplicación web (FastAPI + HTML/JS sin dependencias) que implementa la tarjeta
 | `static/` | frontend (`index.html`, `estilo.css`, `app.js`) |
 | `ejemplos.json` | ids fijos del lote de ejemplo (200 marcas de test, 30 denegadas; el v1 las acierta todas) |
 | `Dockerfile`, `docker-compose.yml`, `.env.example` | ejecución con Docker |
-| `lanzar_demo.slurm` | lanzamiento en lamarr (ya sin GPU) |
+| `lanzar_demo.slurm` | lanzamiento con GPU |
 | `requirements.txt` | dependencias |
 
 Los dos modelos **no se cargan en local**: se consumen por API desde el gateway LiteLLM
