@@ -48,7 +48,7 @@ const esDetenido = (err) => err.name === 'AbortError';
 // ---------------- estado del servidor ----------------
 async function cargarEstado() {
   const e = await api('/api/estado');
-  $('chip-disc').textContent = 'Discriminativo · ' + e.clasificador.nombre;
+  $('chip-disc').textContent = 'Discriminativo · ' + e.clasificador.nombre + ' (' + e.clasificador.modo + ')';
   $('chip-disc').classList.toggle('simulado', e.clasificador.modo === 'simulado');
   $('aviso-simulado').hidden = e.clave.origen !== null;
   if (e.clave.origen !== null) $('clave-error').hidden = true;
