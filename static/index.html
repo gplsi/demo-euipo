@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="estilo.css">
 </head>
 <body>
+<div class="cab-hueco" id="cab-hueco" aria-hidden="true"></div>
 <header class="cabecera">
   <div class="contenedor fila-cab">
     <div class="marca">
@@ -21,11 +22,11 @@
       <span class="chip" id="chip-disc">Discriminativo · …</span>
       <span class="chip" id="chip-gen">Generativo · …</span>
     </div>
+    <nav class="pestanas" aria-label="Secciones">
+      <button type="button" class="pestana activa" data-tab="una">Analizar una marca</button>
+      <button type="button" class="pestana" data-tab="lote">Evaluación por lotes (.jsonl)</button>
+    </nav>
   </div>
-  <nav class="contenedor pestanas" aria-label="Secciones">
-    <button type="button" class="pestana activa" data-tab="una">Analizar una marca</button>
-    <button type="button" class="pestana" data-tab="lote">Evaluación por lotes (.jsonl)</button>
-  </nav>
 </header>
 
 <main class="contenedor principal">
@@ -82,7 +83,7 @@
       </div>
 
       <details>
-        <summary>Ver las dos entradas que recibe el modelo discriminativo (v2.0)</summary>
+        <summary>Ver la entrada que recibe el modelo discriminativo</summary>
         <pre id="entrada" class="pre"></pre>
       </details>
 

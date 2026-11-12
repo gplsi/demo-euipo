@@ -29,6 +29,7 @@ a { color: var(--azul); }
 .contenedor { max-width: 1240px; margin: 0 auto; padding-left: 24px; padding-right: 24px; }
 
 /* ---------- Cabecera ---------- */
+.cab-hueco { display: none; }
 .cabecera {
   position: sticky; top: 0; z-index: 10; color: #fff;
   background:
@@ -36,18 +37,18 @@ a { color: var(--azul); }
     linear-gradient(120deg, var(--azul-osc) 0%, var(--azul-med) 100%);
   box-shadow: 0 6px 24px -12px rgba(11, 31, 68, .6);
 }
-.fila-cab { padding-top: 18px; padding-bottom: 14px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; }
+.fila-cab { padding-top: 18px; padding-bottom: 12px; transition: padding .25s ease; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; }
 .marca { display: flex; align-items: center; gap: 14px; }
-.titulo { font-size: 24px; font-weight: 300; line-height: 1.15; letter-spacing: -.02em; }
+.titulo { font-size: 24px; transition: font-size .25s ease; font-weight: 300; line-height: 1.15; letter-spacing: -.02em; }
 .titulo-acento { font-weight: 700; color: var(--oro); letter-spacing: .02em; }
-.subtitulo { margin-top: 4px; font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: rgba(255, 255, 255, .65); }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.subtitulo { max-height: 24px; overflow: hidden; transition: max-height .25s ease, margin .25s ease, opacity .2s ease; margin-top: 4px; font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: rgba(255, 255, 255, .65); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; transition: opacity .2s ease, max-width .25s ease, max-height .25s ease; max-width: 900px; max-height: 120px; }
 .chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border: 1px solid rgba(255, 255, 255, .2); border-radius: 999px; background: rgba(255, 255, 255, .08); color: rgba(255, 255, 255, .9); font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
 .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #4ADE80; box-shadow: 0 0 0 3px rgba(74, 222, 128, .2); }
 .chip.simulado { background: rgba(234, 122, 46, .16); border-color: rgba(234, 122, 46, .5); color: #FFD9BF; }
 .chip.simulado::before { background: #EA7A2E; box-shadow: 0 0 0 3px rgba(234, 122, 46, .25); }
-.pestanas { display: flex; gap: 6px; padding-bottom: 12px; overflow-x: auto; }
-.pestana { font: inherit; font-weight: 600; font-size: 14px; background: transparent; border: 1px solid transparent; cursor: pointer; padding: 8px 16px; min-height: 40px; border-radius: 999px; color: rgba(255, 255, 255, .72); white-space: nowrap; transition: background .15s, color .15s; }
+.pestanas { display: flex; gap: 6px; overflow-x: auto; min-width: 0; flex: 1 1 100%; order: 3; }
+.pestana { font: inherit; font-weight: 600; font-size: 14px; background: transparent; border: 1px solid transparent; cursor: pointer; padding: 8px 16px; min-height: 40px; border-radius: 999px; transition: background .15s, color .15s, padding .25s ease, min-height .25s ease; color: rgba(255, 255, 255, .72); white-space: nowrap; }
 .pestana:hover { color: #fff; background: rgba(255, 255, 255, .08); }
 .pestana.activa { background: #fff; color: #0B1F44; }
 
@@ -65,7 +66,7 @@ a { color: var(--azul); }
 .columnas > .tarjeta { flex: 1 1 440px; min-width: 0; }
 .columnas > .tarjeta.ancha { flex: 999 1 560px; }
 #tab-una > .tarjeta:first-child { flex: 1 1 520px; }
-#tab-una > .tarjeta:last-child { position: sticky; top: 136px; }
+#tab-una > .tarjeta:last-child { position: sticky; top: calc(var(--alto-cab, 136px) + 16px); }
 .pila { display: flex; flex-direction: column; gap: 24px; }
 .tarjeta { background: var(--superficie); border: 1px solid var(--borde); border-radius: var(--radio); padding: 26px; display: flex; flex-direction: column; gap: 18px; box-shadow: var(--sombra); }
 .paso-num { flex: none; width: 28px; height: 28px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; background: var(--azul-claro); color: var(--azul); font-size: 14px; font-weight: 700; border: 1px solid var(--azul-borde); }
@@ -185,6 +186,19 @@ summary { cursor: pointer; font-weight: 600; }
 .tabla td.err { color: var(--naranja); }
 .pie { margin-top: 32px; font-size: 12px; text-align: center; }
 
+/* Cabecera compacta al hacer scroll: solo título y pestañas, en una fila (pantallas > 760 px) */
+@media (min-width: 761px) {
+  /* La cabecera sale del flujo (fixed) y el hueco conserva su altura expandida: así, al compactarse,
+     el contenido no se mueve ni cambia el scroll (evita el bucle compactar/expandir). */
+  .cabecera { position: fixed; top: 0; left: 0; right: 0; }
+  .cab-hueco { display: block; }
+  .cabecera.compacta .fila-cab { padding-top: 8px; padding-bottom: 8px; flex-wrap: nowrap; }
+  .cabecera.compacta .titulo { font-size: 19px; }
+  .cabecera.compacta .subtitulo { max-height: 0; margin-top: 0; opacity: 0; }
+  .cabecera.compacta .chips { opacity: 0; max-width: 0; max-height: 0; overflow: hidden; pointer-events: none; }
+  .cabecera.compacta .pestanas { order: 2; flex: 0 0 auto; }
+  .cabecera.compacta .pestana { padding: 5px 14px; min-height: 34px; }
+}
 @media (max-width: 760px) {
   .cabecera { position: static; }
   #tab-una > .tarjeta:last-child { position: static; }

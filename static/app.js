@@ -48,7 +48,8 @@ const esDetenido = (err) => err.name === 'AbortError';
 // ---------------- estado del servidor ----------------
 async function cargarEstado() {
   const e = await api('/api/estado');
-  $('chip-disc').textContent = 'Discriminativo · ' + e.clasificador.nombre + ' (' + e.clasificador.modo + ')';
+  $('chip-disc').textContent = 'Discriminativo · ' + e.clasificador.nombre
+    + (e.clasificador.modo === 'simulado' ? '' : ' (' + e.clasificador.modo + ')');
   $('chip-disc').classList.toggle('simulado', e.clasificador.modo === 'simulado');
   $('aviso-simulado').hidden = e.clave.origen !== null;
   if (e.clave.origen !== null) $('clave-error').hidden = true;
@@ -366,6 +367,33 @@ $('jsonl').addEventListener('change', (ev) => {
   ev.target.value = '';
 });
 $('ejemplo').addEventListener('click', () => iniciarLote(api('/api/lote/ejemplo', { method: 'POST' })));
+
+// ---------------- cabecera compacta al hacer scroll ----------------
+(function () {
+  const cab = document.querySelector('.cabecera');
+  const raiz = document.documentElement;
+  let compacta = false, pendiente = false;
+  // Histéresis: compacta al bajar de 70 px y se expande al volver casi arriba, para no parpadear
+  const actualizar = () => {
+    pendiente = false;
+    const y = window.scrollY;
+    if (!compacta && y > 70) compacta = true;
+    else if (compacta && y < 10) compacta = false;
+    cab.classList.toggle('compacta', compacta);
+  };
+  window.addEventListener('scroll', () => {
+    if (!pendiente) { pendiente = true; requestAnimationFrame(actualizar); }
+  }, { passive: true });
+  // El hueco reserva la altura expandida; la tarjeta lateral fija se coloca justo debajo de la cabecera
+  const hueco = $('cab-hueco');
+  const medir = () => {
+    raiz.style.setProperty('--alto-cab', cab.offsetHeight + 'px');
+    if (!compacta) hueco.style.height = cab.offsetHeight + 'px';
+  };
+  if ('ResizeObserver' in window) new ResizeObserver(medir).observe(cab);
+  medir();
+  actualizar();
+})();
 
 // ---------------- arranque ----------------
 alCambiarCampos();
