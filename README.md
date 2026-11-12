@@ -26,7 +26,7 @@ Aplicación web (FastAPI + HTML/JS sin dependencias) que implementa la tarjeta
 Los dos modelos **no se cargan en local**: se consumen por API desde el gateway LiteLLM
 (`https://litellm.tools.gplsi.es`) con **una única API key** para ambos:
 
-- `POST /v1/classify` → `Aitana-euipo-absolute-refusals-1.0` (discriminativo, v1)
+- `POST /v1/classify` → `Aitana-euipo-absolute-refusals-2.0` (discriminativo, v2.0: dos entradas)
 - `POST /v1/chat/completions` → `EUIPO_Aitana_2B_S_Instruct_absolute_refusals_v1` (generativo)
 
 La clave se toma de `LITELLM_API_KEY` (fichero `.env` o variable de entorno), que tiene prioridad.
@@ -98,8 +98,11 @@ al recrear el contenedor). Para desarrollar en local: `docker compose -f docker-
 
 ## Modelos
 
-- Discriminativo: ModernBERT; el endpoint `/v1/classify` devuelve la probabilidad de cada clase y la demo
-  usa la de la positiva (`true`, `LABEL_1`, …). El parser acepta varios formatos de respuesta habituales.
+- Discriminativo **v2.0** (`gplsi/Aitana-euipo-absolute-refusals-2.0`): ModernBERT con **dos entradas**,
+  `text` = nombre de la marca y `text_pair` = bienes y servicios (`"28. términos 35. términos"`).
+  Se llama a `/v1/classify` con `{"model", "inputs": {"text", "text_pair"}}`; un lote va como lista de pares
+  `[{"text", "text_pair"}, …]` (la forma con listas dentro del dict solo devuelve un resultado). La demo usa la probabilidad de la clase positiva
+  (`true`, `LABEL_1`, …); el parser acepta varios formatos de respuesta habituales.
 - Generativo: Aitana 2B con plantilla ChatML; se llama con `messages` (system + user), `temperature=0`
   y `max_tokens=--max-new-tokens`. Si el servidor rechaza el rol `system`, se funde en el mensaje de usuario.
 

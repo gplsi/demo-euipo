@@ -106,7 +106,7 @@ function entradaModelo() {
   const nombre = $('nm').value.trim();
   if (!nombre) return '(vacío)';
   const gs = $('gs').value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join(' ');
-  return nombre + ': ' + gs;
+  return 'text (nombre):\n' + nombre + '\n\ntext_pair (bienes y servicios):\n' + gs;
 }
 
 function alCambiarCampos() {
@@ -191,7 +191,8 @@ $('analizar').addEventListener('click', async () => {
   try {
     const c = await postJSON('/api/clasificar', cuerpo, signal);
     $('res-cargando').hidden = true;
-    $('entrada').textContent = c.entrada;
+    $('entrada').textContent = 'text (nombre):\n' + c.entrada_par.text
+      + '\n\ntext_pair (bienes y servicios):\n' + c.entrada_par.text_pair;
     const v = $('res-veredicto');
     v.hidden = false;
     v.classList.toggle('deneg', c.denegacion);

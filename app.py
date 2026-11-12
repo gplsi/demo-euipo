@@ -48,7 +48,7 @@ except ImportError:  # sin python-dotenv, solo variables de entorno reales
     pass
 
 BASE_URL_DEF = "https://litellm.tools.gplsi.es"
-MODELO_CLASIFICADOR_DEF = "Aitana-euipo-absolute-refusals-1.0"
+MODELO_CLASIFICADOR_DEF = "Aitana-euipo-absolute-refusals-2.0"
 MODELO_GENERADOR_DEF = "EUIPO_Aitana_2B_S_Instruct_absolute_refusals_v1"
 
 # Prompts del modelo generativo, tal cual en la tarjeta de entrenamiento.
@@ -113,14 +113,24 @@ def gs_a_texto(gs):
     )
 
 
-def entrada_discriminativo(name, gs):
-    # Igual que el script de parseo del entrenamiento: "NOMBRE: 28. términos 35. términos"
+def bienes_servicios_texto(gs):
+    """Bienes y servicios en una línea: "28. términos 35. términos"."""
     partes = []
     for g in gs:
         terms = str(g.get("terms", "")).strip()
         if terms:
             partes.append(f"{g.get('classNumber', '')}. {terms}")
-    return f"{name}: " + " ".join(partes)
+    return " ".join(partes)
+
+
+def entrada_discriminativo(name, gs):
+    """Modelo v2.0: dos entradas, (text = nombre de la marca, text_pair = bienes y servicios)."""
+    return (name, bienes_servicios_texto(gs))
+
+
+def texto_entrada(entrada):
+    """Representación legible de la entrada para la interfaz."""
+    return f"{entrada[0]}  ⟂  {entrada[1]}"
 
 
 def prompt_generativo(name, gs):
@@ -233,21 +243,41 @@ class ClasificadorRemoto:
         self.nombre = modelo
         self.modelo = modelo
 
-    def predecir(self, textos, lote=32):
+    @staticmethod
+    def _items(resp, n):
+        items = resp
+        if isinstance(resp, dict):
+            items = next((resp[k] for k in ("data", "results", "predictions", "outputs", "output")
+                          if k in resp), None)
+            if items is None and n == 1:
+                items = [resp]  # una sola entrada: el servidor puede devolver el resultado sin lista
+        if not isinstance(items, list) or len(items) != n:
+            raise HTTPException(502, "Respuesta inesperada de /v1/classify: " + json.dumps(resp)[:200])
+        try:
+            return [_prob_positiva(it) for it in items]
+        except (ValueError, TypeError) as e:
+            raise HTTPException(502, str(e))
+
+    def _una(self, par):
+        resp = self.cliente.post("/v1/classify", {"model": self.modelo,
+                                                  "inputs": {"text": par[0], "text_pair": par[1]}})
+        return self._items(resp, 1)[0]
+
+    def predecir(self, entradas, lote=32):
+        """entradas: lista de (nombre, bienes_y_servicios) -> probabilidad de denegación de cada una.
+
+        Un lote se envía como lista de pares {"text", "text_pair"}. (Con {"text": [...], "text_pair": [...]}
+        el servidor solo devuelve el primer resultado.)
+        """
         probs = []
-        for i in range(0, len(textos), lote):
-            resp = self.cliente.post("/v1/classify", {"model": self.modelo, "input": textos[i:i + lote]})
-            items = resp
-            if isinstance(resp, dict):
-                items = next((resp[k] for k in ("data", "results", "predictions", "outputs", "output")
-                              if k in resp), None)
-            if not isinstance(items, list) or len(items) != len(textos[i:i + lote]):
-                raise HTTPException(502, "Respuesta inesperada de /v1/classify: "
-                                         + json.dumps(resp)[:200])
-            try:
-                probs.extend(_prob_positiva(it) for it in items)
-            except (ValueError, TypeError) as e:
-                raise HTTPException(502, str(e))
+        for i in range(0, len(entradas), lote):
+            trozo = entradas[i:i + lote]
+            if len(trozo) == 1:
+                probs.append(self._una(trozo[0]))
+                continue
+            resp = self.cliente.post("/v1/classify", {"model": self.modelo, "inputs": [
+                {"text": e[0], "text_pair": e[1]} for e in trozo]})
+            probs.extend(self._items(resp, len(trozo)))
         return probs
 
 
@@ -261,9 +291,9 @@ class ClasificadorSimulado:
 
     def predecir(self, textos, lote=32):
         out = []
-        for t in textos:
-            nombre = t.split(":", 1)[0].strip().lower()
-            h = int(hashlib.md5(t.encode()).hexdigest()[:6], 16) / 0xFFFFFF
+        for par in textos:
+            nombre = par[0].strip().lower()
+            h = int(hashlib.md5("|".join(par).encode()).hexdigest()[:6], 16) / 0xFFFFFF
             if nombre in self.etiquetas:
                 out.append(0.9 + 0.09 * h if self.etiquetas[nombre] else 0.01 + 0.05 * h)
             else:
@@ -465,7 +495,8 @@ def crear_app(args):
         if not clave:
             raise HTTPException(400, "Introduce la API key")
         # Comprueba la clave con una llamada mínima antes de guardarla (solo en memoria)
-        cliente.post("/v1/classify", {"model": args.modelo_clasificador, "input": ["test"]},
+        cliente.post("/v1/classify", {"model": args.modelo_clasificador,
+                                      "inputs": {"text": "test", "text_pair": "test"}},
                      timeout=60, clave=clave)
         cliente.clave_ui = clave
         return {"origen": cliente.origen}
@@ -493,7 +524,8 @@ def crear_app(args):
         entrada = entrada_discriminativo(p.name.strip(), gs)
         clf = clasificador_actual()
         prob = clf.predecir([entrada])[0]
-        return {"entrada": entrada, "probabilidad": prob, "denegacion": prob >= args.umbral,
+        return {"entrada": texto_entrada(entrada), "entrada_par": {"text": entrada[0], "text_pair": entrada[1]},
+                "probabilidad": prob, "denegacion": prob >= args.umbral,
                 "umbral": args.umbral, "modo": clf.modo}
 
     detenciones = {}  # peticion_id -> threading.Event
