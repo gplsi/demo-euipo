@@ -69,6 +69,115 @@ USER_TMPL = (
 )
 
 
+# Prompts del generativo nuevo (flujo «solo generativo»): una sola llamada que devuelve un JSON
+# con absolute_refusal, refusal_type y summary_explanation. Idénticos a los del entrenamiento.
+SYSTEM_PROMPT_JSON = (
+    "You are an expert European Union Intellectual Property Office (EUIPO) trademark examiner. "
+    "Your task is to analyze trademark applications and determine whether they must be refused "
+    "registration on absolute grounds under Article 7 of the EUTMR. \n\n"
+    "You will be provided with the trademark's \"Name\" and the requested \"Goods and Services\". \n\n"
+    "You must evaluate the relationship between the mark and the goods/services to output:\n"
+    "1. Whether the application is refused on absolute grounds (true or false).\n"
+    "2. If refused, the exact absolute ground for refusal (e.g., Descriptive, Lack of distinctiveness, "
+    "Customary, Deceptive, Geographical indication, Contrary to public policy/morality, etc.).\n"
+    "3. If refused, a clear, objective, and legal summary explaining why the mark falls under this "
+    "refusal type.\n\n"
+    "Do not include any introductory or concluding remarks. Strictly follow the output format: a JSON "
+    "object with the fields \"absolute_refusal\", \"refusal_type\" and \"summary_explanation\". "
+    "If the application is not refused, \"refusal_type\" and \"summary_explanation\" must be null."
+)
+USER_TMPL_JSON = (
+    "Analyze the following trademark application:\n\n"
+    "[TRADEMARK NAME]\n{name}\n\n[GOODS AND SERVICES]\n{goods}"
+)
+
+
+# --------------------------------------------------------------------------
+# Configuración de modelos (config_modelos.json)
+# --------------------------------------------------------------------------
+
+def cargar_config_modelos(ruta, modelo_clasificador, modelo_generador):
+    """Lee config_modelos.json. Sin fichero, devuelve la configuración mínima con los modelos por defecto.
+
+    Para añadir un modelo nuevo basta con añadir una línea a su lista y reiniciar la web.
+    """
+    defecto = {
+        "discriminativos": [{"id": "v2.0", "nombre": modelo_clasificador, "modelo": modelo_clasificador}],
+        "generativo_clasico": {"nombre": modelo_generador, "modelo": modelo_generador},
+        "generativos_json": [],
+    }
+    if not ruta or not Path(ruta).is_file():
+        return defecto
+    try:
+        cfg = json.loads(Path(ruta).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"[error] No se puede leer {ruta}: {e}")
+
+    def lista(clave, obligatorias):
+        items = cfg.get(clave, defecto[clave])
+        if not isinstance(items, list):
+            raise SystemExit(f"[error] {ruta}: «{clave}» debe ser una lista")
+        ids = set()
+        for it in items:
+            falta = [k for k in obligatorias if k not in it]
+            if falta:
+                raise SystemExit(f"[error] {ruta}: en «{clave}» falta {falta} en {it}")
+            if it["id"] in ids:
+                raise SystemExit(f"[error] {ruta}: id repetido «{it['id']}» en «{clave}»")
+            ids.add(it["id"])
+            it.setdefault("nombre", it["modelo"])
+        return items
+
+    clasico = cfg.get("generativo_clasico") or defecto["generativo_clasico"]
+    if "modelo" not in clasico:
+        raise SystemExit(f"[error] {ruta}: «generativo_clasico» necesita «modelo»")
+    clasico.setdefault("nombre", clasico["modelo"])
+    disc = lista("discriminativos", ("id", "modelo"))
+    if not disc:
+        raise SystemExit(f"[error] {ruta}: «discriminativos» no puede estar vacía")
+    gen_json = lista("generativos_json", ("id", "modelo"))
+    for g in gen_json:
+        g["lowercase"] = bool(g.get("lowercase", False))
+        g["include_class_number"] = bool(g.get("include_class_number", True))
+    return {"discriminativos": disc, "generativo_clasico": clasico, "generativos_json": gen_json}
+
+
+def bienes_json(gs, include_class_number=True, lowercase=False):
+    """Bienes y servicios para el generativo nuevo: «29. términos; 30. términos» (o sin números)."""
+    partes = []
+    for g in gs:
+        terms = str(g.get("terms", "")).strip()
+        if not terms:
+            continue
+        num = str(g.get("classNumber", "")).strip()
+        partes.append(f"{num}. {terms}" if include_class_number and num else terms)
+    texto = "; ".join(partes)
+    return texto.lower() if lowercase else texto
+
+
+def prompt_json(name, gs, cfg_modelo):
+    nombre = name.lower() if cfg_modelo["lowercase"] else name
+    return USER_TMPL_JSON.format(
+        name=nombre, goods=bienes_json(gs, cfg_modelo["include_class_number"], cfg_modelo["lowercase"]))
+
+
+def parsear_json_salida(crudo):
+    """Extrae el JSON de la salida del modelo. Devuelve (dict | None, error | None)."""
+    texto = (crudo or "").strip()
+    texto = re.sub(r"^```(?:json)?\s*|\s*```$", "", texto)
+    recorte = texto[texto.find("{"):texto.rfind("}") + 1] if "{" in texto else ""
+    for candidato in (texto, recorte):
+        try:
+            d = json.loads(candidato)
+        except ValueError:
+            continue
+        if isinstance(d, dict) and "absolute_refusal" in d:
+            return {"absolute_refusal": a_bool(d["absolute_refusal"]),
+                    "refusal_type": d.get("refusal_type"),
+                    "summary_explanation": d.get("summary_explanation")}, None
+    return None, "La salida del modelo no es un JSON válido con «absolute_refusal»"
+
+
 # --------------------------------------------------------------------------
 # Formatos de entrada
 # --------------------------------------------------------------------------
@@ -308,31 +417,36 @@ class GeneradorRemoto:
         self.modelo = modelo
         self.max_new_tokens = max_new_tokens
 
-    def _peticion(self, usuario):
+    def _peticion(self, usuario, sistema=None, max_tokens=None, modelo=None):
+        sistema = sistema or SYSTEM_PROMPT
+
         def cuerpo(msgs):
-            return {"model": self.modelo, "messages": msgs, "temperature": 0,
-                    "max_tokens": self.max_new_tokens}
+            return {"model": modelo or self.modelo, "messages": msgs, "temperature": 0,
+                    "max_tokens": max_tokens or self.max_new_tokens}
         try:
             resp = self.cliente.post("/v1/chat/completions", cuerpo(
-                [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": usuario}]))
+                [{"role": "system", "content": sistema}, {"role": "user", "content": usuario}]))
         except HTTPException as e:
             if e.status_code != 400:
                 raise
             # plantillas sin rol system: se funde en el mensaje de usuario
             resp = self.cliente.post("/v1/chat/completions", cuerpo(
-                [{"role": "user", "content": SYSTEM_PROMPT + "\n\n" + usuario}]))
+                [{"role": "user", "content": sistema + "\n\n" + usuario}]))
         try:
             return (resp["choices"][0]["message"]["content"] or "").strip()
         except (KeyError, IndexError, TypeError):
             raise HTTPException(502, "Respuesta inesperada de /v1/chat/completions: " + json.dumps(resp)[:200])
 
-    def generar(self, usuario, detener=None):
-        """detener: threading.Event opcional; si se activa se descarta la respuesta y devuelve None."""
+    def generar(self, usuario, detener=None, sistema=None, max_tokens=None, modelo=None):
+        """detener: threading.Event opcional; si se activa se descarta la respuesta y devuelve None.
+
+        sistema / max_tokens / modelo permiten usar el mismo cliente con otro modelo y otro prompt.
+        """
         res = {}
 
         def trabajo():
             try:
-                res["ok"] = self._peticion(usuario)
+                res["ok"] = self._peticion(usuario, sistema, max_tokens, modelo)
             except Exception as e:  # noqa: BLE001 — se relanza en el hilo que espera
                 res["error"] = e
 
@@ -418,6 +532,8 @@ class Peticion(BaseModel):
     goods: str = ""
     candidato_id: str | None = None
     peticion_id: str | None = None  # para poder detener la explicación con /api/detener/{id}
+    discriminativo: str | None = None  # id en config_modelos.json (flujo clásico); por defecto, el primero
+    modelo: str | None = None  # id del generativo JSON (flujo «solo generativo»)
 
 
 def crear_app(args):
@@ -441,15 +557,26 @@ def crear_app(args):
         print(f"[datos] lote de ejemplo fijo: {len(lote_fijo)} marcas de {Path(args.ejemplos).name}")
 
     cliente = ClienteLiteLLM(args.base_url, os.environ.get("LITELLM_API_KEY"))
-    remoto = ClasificadorRemoto(cliente, args.modelo_clasificador)
+    cfg = cargar_config_modelos(args.config_modelos, args.modelo_clasificador, args.modelo_generador)
+    print(f"[config] discriminativos: {[d['id'] for d in cfg['discriminativos']]} | "
+          f"generativos JSON: {[g['id'] for g in cfg['generativos_json']]}")
+    remotos = {d["id"]: ClasificadorRemoto(cliente, d["modelo"]) for d in cfg["discriminativos"]}
+    for d in cfg["discriminativos"]:
+        remotos[d["id"]].nombre = d["nombre"]
     simulado = ClasificadorSimulado(datos.etiquetas)
-    generador = GeneradorRemoto(cliente, args.modelo_generador, args.max_new_tokens)
+    generador = GeneradorRemoto(cliente, cfg["generativo_clasico"]["modelo"], args.max_new_tokens)
+    generador.nombre = cfg["generativo_clasico"]["nombre"]
+    gen_json = {g["id"]: g for g in cfg["generativos_json"]}
     if not cliente.clave:
         print("[aviso] Sin LITELLM_API_KEY: la interfaz pedirá la clave; mientras tanto el "
               "discriminativo está SIMULADO.")
 
-    def clasificador_actual():
-        return remoto if cliente.clave else simulado
+    def clasificador_actual(did=None):
+        if not cliente.clave:
+            return simulado
+        if did and did not in remotos:
+            raise HTTPException(400, f"Discriminativo desconocido: {did}")
+        return remotos[did or cfg["discriminativos"][0]["id"]]
 
     precalculadas = {}
     if args.predicciones:
@@ -483,6 +610,13 @@ def crear_app(args):
             "generador": {"modo": gen_modo, "nombre": generador.nombre if cliente.clave else
                           ("predictions.jsonl" if precalculadas else "")},
             "clave": {"origen": cliente.origen},
+            "modelos": {
+                "discriminativos": [{"id": d["id"], "nombre": d["nombre"]} for d in cfg["discriminativos"]],
+                "generativos_json": [{"id": g["id"], "nombre": g["nombre"],
+                                      "lowercase": g["lowercase"],
+                                      "include_class_number": g["include_class_number"]}
+                                     for g in cfg["generativos_json"]],
+            },
             "umbral": args.umbral, "semilla": args.semilla, "muestreo": args.muestreo,
             "lote_ejemplo": bool(datos.ruta),
         }
@@ -495,7 +629,7 @@ def crear_app(args):
         if not clave:
             raise HTTPException(400, "Introduce la API key")
         # Comprueba la clave con una llamada mínima antes de guardarla (solo en memoria)
-        cliente.post("/v1/classify", {"model": args.modelo_clasificador,
+        cliente.post("/v1/classify", {"model": cfg["discriminativos"][0]["modelo"],
                                       "inputs": {"text": "test", "text_pair": "test"}},
                      timeout=60, clave=clave)
         cliente.clave_ui = clave
@@ -522,11 +656,11 @@ def crear_app(args):
             raise HTTPException(400, "Falta el nombre de la marca")
         gs = resolver_gs(p)
         entrada = entrada_discriminativo(p.name.strip(), gs)
-        clf = clasificador_actual()
+        clf = clasificador_actual(p.discriminativo)
         prob = clf.predecir([entrada])[0]
         return {"entrada": texto_entrada(entrada), "entrada_par": {"text": entrada[0], "text_pair": entrada[1]},
                 "probabilidad": prob, "denegacion": prob >= args.umbral,
-                "umbral": args.umbral, "modo": clf.modo}
+                "umbral": args.umbral, "modo": clf.modo, "modelo": clf.nombre}
 
     detenciones = {}  # peticion_id -> threading.Event
 
@@ -558,15 +692,44 @@ def crear_app(args):
         return {"tipo": tipo, "explicacion": texto, "crudo": crudo, "fuente": fuente,
                 "prompt": prompt, "segundos": round(time.time() - t0, 2)}
 
+    @app.post("/api/analizar-json")
+    def analizar_json(p: Peticion):
+        """Flujo «solo generativo»: una llamada al modelo generativo nuevo, que devuelve un JSON."""
+        if not p.name.strip():
+            raise HTTPException(400, "Falta el nombre de la marca")
+        if not gen_json:
+            raise HTTPException(404, "No hay generativos JSON configurados en config_modelos.json")
+        mid = p.modelo or cfg["generativos_json"][0]["id"]
+        if mid not in gen_json:
+            raise HTTPException(400, f"Modelo desconocido: {mid}")
+        if not cliente.clave:
+            raise HTTPException(401, "Falta la API key: este flujo solo funciona con el modelo remoto")
+        m = gen_json[mid]
+        prompt = prompt_json(p.name.strip(), resolver_gs(p), m)
+        ev = detenciones.setdefault(p.peticion_id, threading.Event()) if p.peticion_id else None
+        t0 = time.time()
+        try:
+            crudo = generador.generar(prompt, ev, sistema=SYSTEM_PROMPT_JSON,
+                                      max_tokens=int(m.get("max_tokens", 512)), modelo=m["modelo"])
+        finally:
+            detenciones.pop(p.peticion_id, None)
+        if crudo is None:
+            raise HTTPException(409, "Análisis detenido")
+        salida, error = parsear_json_salida(crudo)
+        return {"salida": salida, "error_formato": error, "crudo": crudo, "prompt": prompt,
+                "modelo": {"id": mid, "nombre": m["nombre"], "modelo": m["modelo"],
+                           "lowercase": m["lowercase"], "include_class_number": m["include_class_number"]},
+                "segundos": round(time.time() - t0, 2)}
+
     # ---------------- lotes ----------------
 
-    def evaluar(tid, filas_iter, total):
+    def evaluar(tid, filas_iter, total, did=None):
         t = trabajos[tid]
         try:
             buf, filas = [], []
 
             def vaciar():
-                probs = clasificador_actual().predecir([b[1] for b in buf], args.lote)
+                probs = clasificador_actual(did).predecir([b[1] for b in buf], args.lote)
                 for (fila, _), p in zip(buf, probs):
                     fila["prob"] = p
                     fila["pred"] = p >= args.umbral
@@ -612,15 +775,16 @@ def crear_app(args):
         except Exception as e:  # noqa: BLE001 — se muestra en la interfaz
             t.update({"estado": "error", "error": f"{type(e).__name__}: {e}"})
 
-    def lanzar(nombre, filas_iter, total, tid=None):
+    def lanzar(nombre, filas_iter, total, tid=None, did=None):
+        clasificador_actual(did)  # valida el id antes de arrancar el hilo
         tid = tid or uuid.uuid4().hex[:12]
         trabajos[tid] = {"estado": "en curso", "archivo": nombre, "total": total, "hechas": 0,
                          "descartadas": 0, "inicio": time.time()}
-        threading.Thread(target=evaluar, args=(tid, filas_iter, total), daemon=True).start()
+        threading.Thread(target=evaluar, args=(tid, filas_iter, total, did), daemon=True).start()
         return {"id": tid}
 
     @app.post("/api/lote")
-    def subir_lote(archivo: UploadFile = File(...)):
+    def subir_lote(archivo: UploadFile = File(...), discriminativo: str | None = None):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl")
         with tmp:
             while trozo := archivo.file.read(1 << 20):
@@ -642,17 +806,18 @@ def crear_app(args):
             finally:
                 Path(tmp.name).unlink(missing_ok=True)
 
-        return lanzar(archivo.filename or "lote.jsonl", filas(), total, tid)
+        return lanzar(archivo.filename or "lote.jsonl", filas(), total, tid, discriminativo)
 
     @app.post("/api/lote/ejemplo")
-    def lote_ejemplo():
+    def lote_ejemplo(discriminativo: str | None = None):
         if not datos.ruta:
             raise HTTPException(400, "Arranca con --test para usar el lote de ejemplo")
         if lote_fijo:
             filas = datos.por_ids(lote_fijo)
         else:
             filas = datos.lote_ejemplo(args.ejemplo_n, args.ejemplo_pos, args.semilla)
-        return lanzar(f"ejemplo de {datos.ruta.name} ({len(filas)} marcas)", iter(filas), len(filas))
+        return lanzar(f"ejemplo de {datos.ruta.name} ({len(filas)} marcas)", iter(filas), len(filas),
+                      did=discriminativo)
 
     @app.post("/api/lote/{tid}/detener")
     def detener_lote(tid: str):
@@ -692,6 +857,9 @@ def main():
     ap.add_argument("--predicciones", help="predictions.jsonl con salidas del generativo")
     ap.add_argument("--base-url", default=os.environ.get("LITELLM_BASE_URL", BASE_URL_DEF),
                     help="gateway LiteLLM (también LITELLM_BASE_URL)")
+    ap.add_argument("--config-modelos",
+                    default=os.environ.get("MODELOS_CONFIG", str(AQUI / "config_modelos.json")),
+                    help="JSON con los modelos disponibles (también MODELOS_CONFIG)")
     ap.add_argument("--modelo-clasificador",
                     default=os.environ.get("CLASIFICADOR_MODEL", MODELO_CLASIFICADOR_DEF))
     ap.add_argument("--modelo-generador",

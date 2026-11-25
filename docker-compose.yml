@@ -14,6 +14,9 @@ services:
     volumes:
       - ${TEST_JSONL:-../test.jsonl}:/srv/test.jsonl:ro
       - ${PREDICCIONES_JSONL:-../predictions.jsonl}:/srv/predictions.jsonl:ro
+      # Para cambiar los modelos disponibles SIN reconstruir la imagen: copia config_modelos.json junto a este
+      # fichero, edítalo, descomenta la línea siguiente y reinicia (docker compose restart demo).
+      # - ./config_modelos.json:/srv/app/config_modelos.json:ro
     # Opciones extra de app.py, p. ej. "--usar-precalculadas"
     command: ${OPCIONES:-}
     restart: unless-stopped

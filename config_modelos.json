@@ -1,0 +1,13 @@
+{
+  "discriminativos": [
+    {"id": "v2.0", "nombre": "Aitana-euipo-absolute-refusals-2.0", "modelo": "Aitana-euipo-absolute-refusals-2.0"}
+  ],
+  "generativo_clasico": {
+    "nombre": "EUIPO_Aitana_2B_S_Instruct_absolute_refusals_v1",
+    "modelo": "EUIPO_Aitana_2B_S_Instruct_absolute_refusals_v1"
+  },
+  "generativos_json": [
+    {"id": "v0", "nombre": "Generativo v0", "modelo": "EUIPO_Aitana_2B_S_Instruct_generative_v0", "lowercase": false, "include_class_number": true},
+    {"id": "v1", "nombre": "Generativo v1", "modelo": "EUIPO_Aitana_2B_S_Instruct_generative_v1", "lowercase": false, "include_class_number": true}
+  ]
+}

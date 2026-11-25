@@ -76,6 +76,8 @@ a { color: var(--azul); }
 
 /* ---------- Formulario ---------- */
 .segmentado { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; background: var(--gris); border-radius: 12px; }
+.segmentado.dos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pila-res { display: flex; flex-direction: column; gap: 16px; }
 .segmentado button { font: inherit; font-size: 14px; font-weight: 600; min-height: 42px; border: none; border-radius: 9px; cursor: pointer; background: transparent; color: var(--suave); transition: background .15s, color .15s; }
 .segmentado button:hover { color: var(--tinta); }
 .segmentado button.activo { background: var(--superficie); color: var(--azul); box-shadow: 0 1px 3px rgba(15, 27, 45, .14); }

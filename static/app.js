@@ -7,7 +7,12 @@ const prob = (x) => (x > 0 && x < 0.001 ? '< 0,1 %' : pct(x));
 const etiqueta = (b) => (b ? 'Denegación absoluta' : 'Sin denegación');
 
 let candidatos = [];
-let candidatoActual = null;   // candidato elegido en el desplegable, si los campos no se han tocado
+let candidatoActual = null;
+// Flujo de análisis: 'clasico' (discriminativo + generativo) o 'json' (solo generativo nuevo)
+let flujo = 'clasico';
+let estadoServidor = null;
+const guardar = (k, v) => { try { localStorage.setItem('euipo.' + k, v); } catch (e) { /* sin almacenamiento */ } };
+const leer = (k) => { try { return localStorage.getItem('euipo.' + k); } catch (e) { return null; } };   // candidato elegido en el desplegable, si los campos no se han tocado
 
 async function api(ruta, opciones) {
   const r = await fetch(ruta, opciones);
@@ -58,7 +63,69 @@ async function cargarEstado() {
   $('chip-gen').classList.toggle('simulado', e.generador.modo === 'no disponible');
   $('lbl-cand').textContent = 'Marca candidata (partición de test; el botón trae otras 10 al azar)';
   $('ejemplo').hidden = !e.lote_ejemplo;
+  estadoServidor = e;
+  rellenarModelos(e.modelos);
 }
+
+function rellenar(sel, items, guardado) {
+  sel.textContent = '';
+  for (const it of items) {
+    const o = document.createElement('option');
+    o.value = it.id;
+    o.textContent = it.nombre;
+    sel.appendChild(o);
+  }
+  if (guardado && items.some((it) => it.id === guardado)) sel.value = guardado;
+}
+
+function rellenarModelos(m) {
+  rellenar($('sel-disc'), m.discriminativos, leer('disc'));
+  rellenar($('sel-gen'), m.generativos_json, leer('gen'));
+  // El selector de flujo solo aparece si hay generativos JSON configurados
+  $('bloque-flujo').hidden = !m.generativos_json.length;
+  if (!m.generativos_json.length) flujo = 'clasico';
+  else if (leer('flujo') === 'json') flujo = 'json';
+  aplicarFlujo();
+}
+
+function aplicarFlujo() {
+  const json = flujo === 'json';
+  for (const b of document.querySelectorAll('[data-flujo]')) b.classList.toggle('activo', b.dataset.flujo === flujo);
+  $('sel-disc-bloque').hidden = json || $('sel-disc').options.length < 2;
+  $('sel-gen-bloque').hidden = !json;
+  const g = estadoServidor && estadoServidor.modelos.generativos_json.find((x) => x.id === $('sel-gen').value);
+  $('gen-cfg').textContent = g
+    ? 'Minúsculas: ' + (g.lowercase ? 'sí' : 'no') + ' · Número de clase: ' + (g.include_class_number ? 'sí' : 'no')
+    : '';
+  $('entrada-resumen').textContent = json
+    ? 'Ver la entrada que recibe el modelo generativo'
+    : 'Ver la entrada que recibe el modelo discriminativo';
+  $('res-vacio').innerHTML = json
+    ? 'Introduce una marca y pulsa <strong>Analizar</strong>. El modelo generativo decide si hay denegación absoluta y, en ese caso, explica el motivo en una sola respuesta JSON.'
+    : 'Introduce una marca y pulsa <strong>Analizar</strong>. Primero decide el modelo discriminativo; si hay denegación absoluta, el generativo explica el motivo.';
+  $('chip-disc').hidden = json;
+  if (json && g) {
+    $('chip-gen').textContent = 'Generativo JSON · ' + g.nombre + ' (remoto)';
+    $('chip-gen').classList.remove('simulado');
+  } else if (estadoServidor) {
+    const e = estadoServidor;
+    const gen = e.generador.nombre ? e.generador.nombre + ' (' + e.generador.modo + ')' : e.generador.modo;
+    $('chip-gen').textContent = 'Generativo · ' + gen;
+    $('chip-gen').classList.toggle('simulado', e.generador.modo === 'no disponible');
+  }
+  $('entrada').textContent = entradaModelo();
+}
+
+for (const b of document.querySelectorAll('[data-flujo]')) {
+  b.addEventListener('click', () => {
+    flujo = b.dataset.flujo;
+    guardar('flujo', flujo);
+    reiniciarResultado();
+    aplicarFlujo();
+  });
+}
+$('sel-disc').addEventListener('change', () => guardar('disc', $('sel-disc').value));
+$('sel-gen').addEventListener('change', () => { guardar('gen', $('sel-gen').value); aplicarFlujo(); });
 
 async function cargarCandidatos(aleatorio = false) {
   candidatos = await api('/api/candidatos' + (aleatorio ? '?aleatorio=1' : ''));
@@ -106,6 +173,7 @@ document.querySelectorAll('.segmentado button').forEach((b) => b.addEventListene
 function entradaModelo() {
   const nombre = $('nm').value.trim();
   if (!nombre) return '(vacío)';
+  if (flujo === 'json') return '(el prompt exacto, con la configuración del modelo, se muestra al analizar)';
   const gs = $('gs').value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join(' ');
   return 'text (nombre):\n' + nombre + '\n\ntext_pair (bienes y servicios):\n' + gs;
 }
@@ -154,7 +222,7 @@ $('limpiar').addEventListener('click', () => {
 // ---------------- análisis de una marca ----------------
 function reiniciarResultado() {
   $('res-vacio').hidden = false;
-  for (const id of ['res-cargando', 'res-error', 'res-detenido', 'res-veredicto', 'res-explicacion', 'res-no-gen', 'res-real']) $(id).hidden = true;
+  for (const id of ['res-cargando', 'res-error', 'res-detenido', 'res-veredicto', 'res-explicacion', 'res-no-gen', 'res-real', 'res-json']) $(id).hidden = true;
 }
 
 function mostrarError(id, err) {
@@ -179,6 +247,7 @@ $('analizar').addEventListener('click', async () => {
   const cuerpo = {
     name: $('nm').value.trim(), goods: $('gs').value,
     candidato_id: candidatoActual ? candidatoActual.id : null, peticion_id: pid,
+    discriminativo: $('sel-disc').value || null, modelo: $('sel-gen').value || null,
   };
   const real = candidatoActual ? candidatoActual.absolute_refusal : null;
   reiniciarResultado();
@@ -190,6 +259,11 @@ $('analizar').addEventListener('click', async () => {
   $('detener').hidden = false;
   $('detener').disabled = false;
   try {
+    if (flujo === 'json') {
+      $('res-paso').textContent = 'Analizando con el modelo generativo…';
+      await analizarJSON(cuerpo, signal, real);
+      return;
+    }
     const c = await postJSON('/api/clasificar', cuerpo, signal);
     $('res-cargando').hidden = true;
     $('entrada').textContent = 'text (nombre):\n' + c.entrada_par.text
@@ -250,6 +324,39 @@ $('analizar').addEventListener('click', async () => {
   }
 });
 
+// Flujo «solo generativo»: una llamada que devuelve el JSON con veredicto, tipo y explicación
+async function analizarJSON(cuerpo, signal, real) {
+  const r = await postJSON('/api/analizar-json', cuerpo, signal);
+  $('res-cargando').hidden = true;
+  $('res-json').hidden = false;
+  $('entrada').textContent = r.prompt;
+  $('rj-crudo').textContent = r.crudo;
+  const s = r.salida;
+  $('rj-error').hidden = !r.error_formato;
+  if (r.error_formato) $('rj-error').textContent = r.error_formato + '. Revisa la salida cruda.';
+  $('rj-det').open = !!r.error_formato;
+  $('rj-veredicto').hidden = !s;
+  $('rj-expl').hidden = true;
+  if (s) {
+    $('rj-veredicto').classList.toggle('deneg', s.absolute_refusal);
+    $('rj-texto').textContent = s.absolute_refusal ? 'Denegación absoluta' : 'Sin motivo de denegación absoluta';
+    if (s.absolute_refusal) {
+      $('rj-expl').hidden = false;
+      const t = s.refusal_type ? String(s.refusal_type) : '';
+      $('rj-tipo').textContent = t ? t.charAt(0).toUpperCase() + t.slice(1) : '—';
+      $('rj-resumen').textContent = s.summary_explanation || '';
+    }
+    if (real !== null) {
+      $('res-real').hidden = false;
+      $('res-real').innerHTML = '<span>Etiqueta real: <strong></strong></span><span></span>';
+      $('res-real').querySelector('strong').textContent = etiqueta(real);
+      $('res-real').lastChild.textContent = real === s.absolute_refusal ? 'La predicción coincide' : 'La predicción no coincide';
+    }
+  }
+  $('rj-meta').textContent = 'Modelo ' + r.modelo.nombre + ' · minúsculas: ' + (r.modelo.lowercase ? 'sí' : 'no')
+    + ' · número de clase: ' + (r.modelo.include_class_number ? 'sí' : 'no') + ' · ' + num(r.segundos, 1) + ' s';
+}
+
 // ---------------- lotes ----------------
 let sondeo = null;
 let loteActual = null;
@@ -260,6 +367,9 @@ $('detener-lote').addEventListener('click', async () => {
   $('lote-prog-texto').textContent = 'Deteniendo…';
   try { await api('/api/lote/' + loteActual + '/detener', { method: 'POST' }); } catch (e) { /* ya había terminado */ }
 });
+
+// Discriminativo elegido en la pestaña de análisis, para que el lote use el mismo modelo
+const qDisc = () => ($('sel-disc').value ? '?discriminativo=' + encodeURIComponent($('sel-disc').value) : '');
 
 async function iniciarLote(promesa) {
   clearTimeout(sondeo);
@@ -363,10 +473,10 @@ $('jsonl').addEventListener('change', (ev) => {
   if (!f) return;
   const fd = new FormData();
   fd.append('archivo', f);
-  iniciarLote(api('/api/lote', { method: 'POST', body: fd }));
+  iniciarLote(api('/api/lote' + qDisc(), { method: 'POST', body: fd }));
   ev.target.value = '';
 });
-$('ejemplo').addEventListener('click', () => iniciarLote(api('/api/lote/ejemplo', { method: 'POST' })));
+$('ejemplo').addEventListener('click', () => iniciarLote(api('/api/lote/ejemplo' + qDisc(), { method: 'POST' })));
 
 // ---------------- cabecera compacta al hacer scroll ----------------
 (function () {

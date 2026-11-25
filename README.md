@@ -96,6 +96,43 @@ Comprueba con `docker logs -f watchtower`.
 Notas: en el servidor pon la clave en `.env` (la escrita en la web vive solo en memoria y se pierde
 al recrear el contenedor). Para desarrollar en local: `docker compose -f docker-compose.dev.yml up --build`.
 
+## Modelos disponibles: `config_modelos.json`
+
+La demo tiene **dos flujos**, que se eligen en la interfaz («Flujo de análisis»):
+
+1. **Discriminativo + generativo** (el de siempre): el discriminativo decide y, solo si hay denegación,
+   el generativo antiguo explica el motivo.
+2. **Solo generativo (JSON)**: los generativos nuevos (v0, v1, v2…) no pasan por el discriminativo; una sola
+   llamada devuelve `{"absolute_refusal", "refusal_type", "summary_explanation"}`.
+
+Los modelos de cada flujo se definen en [config_modelos.json](config_modelos.json). **Para añadir un
+modelo nuevo basta con añadir una línea a su lista y reiniciar la web**:
+
+```json
+"generativos_json": [
+  {"id": "v0", "nombre": "Generativo v0", "modelo": "EUIPO_..._generative_v0", "lowercase": false, "include_class_number": true},
+  {"id": "v2", "nombre": "Generativo v2", "modelo": "EUIPO_..._generative_v2", "lowercase": false, "include_class_number": false}
+]
+```
+
+- `modelo` es el nombre en el gateway LiteLLM; `nombre` es el que se ve en la web.
+- `lowercase`: pasa a minúsculas el nombre y los bienes y servicios antes de enviarlos.
+- `include_class_number`: incluye (`29. términos; 30. términos`) o no (`términos; términos`) el número de clase.
+- `max_tokens` (opcional, 512 por defecto): tokens máximos de la respuesta.
+- `discriminativos` admite varias entradas (`id`, `modelo`, `nombre`); si hay más de una, aparece un
+  selector en el flujo clásico y el lote usa el elegido. `generativo_clasico` es el que explica en el flujo clásico.
+- Si el fichero no existe, se usan los modelos por defecto (`--modelo-clasificador`, `--modelo-generador`) y no
+  aparece el flujo JSON.
+
+Una versión que aún no esté desplegada en LiteLLM no debe añadirse al fichero (daría error al usarla).
+
+**En el servidor:** el fichero va dentro de la imagen, así que un cambio hecho con commit y push se despliega
+solo. Para cambiarlo sin reconstruir, monta el tuyo (ver el volumen comentado en `docker-compose.yml`, o
+`MODELOS_CONFIG=/ruta/fichero.json`) y ejecuta `docker compose restart demo`.
+
+El flujo JSON usa el prompt del entrenamiento (system + `[TRADEMARK NAME]` / `[GOODS AND SERVICES]`, clases
+unidas con `"; "`) y no está disponible en el lote (.jsonl): la evaluación por lotes sigue usando el discriminativo.
+
 ## Modelos
 
 - Discriminativo **v2.0** (`gplsi/Aitana-euipo-absolute-refusals-2.0`): ModernBERT con **dos entradas**,
@@ -165,7 +202,7 @@ con franja naranja) y las explicaciones solo existen para marcas denegadas de `p
 | `--semilla`, `--n-candidatos`, `--grupo-candidatos` | 42, 10, 100 | desplegable y botón aleatorio (elige 10 de un grupo de 100) |
 | `--ejemplo-n`, `--ejemplo-pos` | 200, 30 | lote de ejemplo del botón «Usar lote de ejemplo» |
 | `--lote` | 32 | tamaño de lote del discriminativo en la evaluación |
-| `--base-url`, `--modelo-clasificador`, `--modelo-generador` | ver `.env.example` | gateway y nombres de modelo (también `LITELLM_BASE_URL`, `CLASIFICADOR_MODEL`, `GENERADOR_MODEL`) |
+| `--base-url`, `--config-modelos` | ver `.env.example` | gateway (también `LITELLM_BASE_URL`) y fichero de modelos (también `MODELOS_CONFIG`) |
 
 ## API
 

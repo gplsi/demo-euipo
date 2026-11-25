@@ -82,8 +82,25 @@
         <textarea id="gs" rows="9" placeholder="35. Supply chain management services; ...&#10;39. Transportation services; ..."></textarea>
       </div>
 
+      <div id="bloque-flujo" class="campo" hidden>
+        <label id="lbl-flujo">Flujo de análisis</label>
+        <div class="segmentado dos" role="group" aria-label="Flujo de análisis">
+          <button type="button" data-flujo="clasico" class="activo">Discriminativo + generativo</button>
+          <button type="button" data-flujo="json">Solo generativo (JSON)</button>
+        </div>
+        <div id="sel-disc-bloque" class="campo" hidden>
+          <label for="sel-disc">Modelo discriminativo</label>
+          <select id="sel-disc"></select>
+        </div>
+        <div id="sel-gen-bloque" class="campo" hidden>
+          <label for="sel-gen">Modelo generativo</label>
+          <select id="sel-gen"></select>
+          <div id="gen-cfg" class="nota"></div>
+        </div>
+      </div>
+
       <details>
-        <summary>Ver la entrada que recibe el modelo discriminativo</summary>
+        <summary id="entrada-resumen">Ver la entrada que recibe el modelo discriminativo</summary>
         <pre id="entrada" class="pre"></pre>
       </details>
 
@@ -122,6 +139,24 @@
           <p id="exp-texto" class="exp-texto"></p>
           <div id="exp-fuente" class="nota"></div>
         </div>
+      </div>
+
+      <div id="res-json" class="pila-res" hidden>
+        <div id="rj-veredicto" class="veredicto">
+          <div class="etiqueta-paso" id="rj-etiqueta">Modelo generativo · Salida JSON</div>
+          <div id="rj-texto" class="ver-texto"></div>
+        </div>
+        <div id="rj-expl" class="explicacion" hidden>
+          <div class="etiqueta-paso">Motivo</div>
+          <div class="fila-tipo"><span class="nota">Tipo de denegación</span><span id="rj-tipo" class="pildora-tipo"></span></div>
+          <p id="rj-resumen" class="exp-texto"></p>
+        </div>
+        <div id="rj-error" class="error" hidden></div>
+        <div id="rj-meta" class="nota"></div>
+        <details id="rj-det">
+          <summary>Ver la salida JSON del modelo</summary>
+          <pre id="rj-crudo" class="pre"></pre>
+        </details>
       </div>
 
       <div id="res-no-gen" class="nota" hidden>Sin denegación absoluta: no se invoca el modelo generativo.</div>

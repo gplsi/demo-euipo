@@ -8,7 +8,7 @@ WORKDIR /srv/app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY app.py prueba_formato.py ejemplos.json ./
+COPY app.py prueba_formato.py ejemplos.json config_modelos.json ./
 COPY static ./static
 
 # app.py busca por defecto ../test.jsonl y ../predictions.jsonl
